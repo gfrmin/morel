@@ -22,6 +22,7 @@ import static java.util.Objects.requireNonNull;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -155,6 +156,137 @@ public class Calcite {
         .asQueryOrValues()
         .toSqlString(dialect)
         .getSql();
+  }
+
+  /**
+   * Generates incremental DDL (DBSP circuit) for a relational expression.
+   * Returns a list of DDL statements: target table, materialized view, and
+   * initial backfill.
+   *
+   * <p>For aggregations, uses AggregatingMergeTree with -State combinators. For
+   * filter/project, uses plain MergeTree with a MV for delta propagation.
+   */
+  public List<String> toIncrementalDdl(
+      RelNode rel, SqlDialect dialect, String targetName) {
+    final String selectSql = toSql(rel, dialect);
+    final boolean hasAggregate =
+        selectSql.contains("ARG_MAX(")
+            || selectSql.contains("ARG_MIN(")
+            || selectSql.contains("SUM(")
+            || selectSql.contains("COUNT(")
+            || selectSql.contains("MAX(")
+            || selectSql.contains("MIN(")
+            || selectSql.contains("AVG(");
+    if (hasAggregate) {
+      return aggregateIncrementalDdl(selectSql, targetName);
+    } else {
+      return filterProjectIncrementalDdl(selectSql, targetName);
+    }
+  }
+
+  /**
+   * Generates incremental DDL for an aggregate query using AggregatingMergeTree
+   * and -State/-Merge combinators.
+   */
+  private static List<String> aggregateIncrementalDdl(
+      String selectSql, String targetName) {
+    // Replace aggregate functions with -State variants
+    final String stateSql =
+        selectSql
+            .replace("ARG_MAX(", "argMaxState(")
+            .replace("ARG_MIN(", "argMinState(")
+            .replace("SUM(", "sumState(")
+            .replace("COUNT(", "countState(")
+            .replace("MAX(", "maxState(")
+            .replace("MIN(", "minState(")
+            .replace("AVG(", "avgState(");
+
+    // Extract GROUP BY columns for ORDER BY
+    final String orderBy;
+    final int groupByIdx = stateSql.toUpperCase().lastIndexOf("GROUP BY");
+    if (groupByIdx >= 0) {
+      orderBy = stateSql.substring(groupByIdx + 9).trim();
+    } else {
+      orderBy = "tuple()";
+    }
+
+    final List<String> ddl = new ArrayList<>();
+
+    // 1. Create target table with AggregatingMergeTree
+    //    Use LIMIT 0 to get schema without data
+    ddl.add(
+        "CREATE TABLE IF NOT EXISTS "
+            + targetName
+            + "\n" //
+            + "ENGINE = AggregatingMergeTree()\n"
+            + "ORDER BY ("
+            + orderBy
+            + ")\n"
+            + "AS "
+            + stateSql
+            + "\n"
+            + "LIMIT 0");
+
+    // 2. Create MV for incremental processing
+    ddl.add(
+        "CREATE MATERIALIZED VIEW IF NOT EXISTS\n" //
+            + targetName
+            + "_mv\n"
+            + "TO "
+            + targetName
+            + "\n"
+            + "AS "
+            + stateSql);
+
+    // 3. Initial backfill
+    ddl.add(
+        "INSERT INTO "
+            + targetName
+            + "\n" //
+            + stateSql);
+
+    return ddl;
+  }
+
+  /**
+   * Generates incremental DDL for a filter/project query using plain MergeTree
+   * with a MV for delta propagation.
+   */
+  private static List<String> filterProjectIncrementalDdl(
+      String selectSql, String targetName) {
+    final List<String> ddl = new ArrayList<>();
+
+    // 1. Create target table
+    ddl.add(
+        "CREATE TABLE IF NOT EXISTS "
+            + targetName
+            + "\n" //
+            + "ENGINE = MergeTree()\n"
+            + "ORDER BY tuple()\n"
+            + "AS "
+            + selectSql
+            + "\n"
+            + "LIMIT 0");
+
+    // 2. Create MV
+    ddl.add(
+        "CREATE MATERIALIZED VIEW IF NOT EXISTS\n" //
+            + targetName
+            + "_mv\n"
+            + "TO "
+            + targetName
+            + "\n"
+            + "AS "
+            + selectSql);
+
+    // 3. Initial backfill
+    ddl.add(
+        "INSERT INTO "
+            + targetName
+            + "\n" //
+            + selectSql);
+
+    return ddl;
   }
 
   /** Copied from {@link Programs}. */

@@ -118,6 +118,10 @@ while [ $# -gt 0 ]; do
       MATERIALIZE="$1"
       shift
       ;;
+    (--output=*)
+      MATERIALIZE="--materialize=${1#--output=}"
+      shift
+      ;;
     (--foreign=*)
       FOREIGN="$FOREIGN $1"
       shift

@@ -193,6 +193,9 @@ public class Shell {
       if (arg.startsWith("--materialize=")) {
         c = c.withMaterialize(arg.substring("--materialize=".length()));
       }
+      if (arg.startsWith("--output=")) {
+        c = c.withMaterialize(arg.substring("--output=".length()));
+      }
       if (arg.startsWith("--file=")) {
         c = c.withFile(arg.substring("--file=".length()));
       }
@@ -390,6 +393,104 @@ public class Shell {
     terminal.writer().flush();
   }
 
+  /**
+   * Compiles an expression and creates an incremental DBSP pipeline in
+   * ClickHouse via JDBC.
+   */
+  private void runJdbc() {
+    final String schema = extractSchema(config.jdbc);
+    final SqlDialect dialect = inferDialect(config.jdbc);
+    final TypeSystem typeSystem = new TypeSystem();
+    final Map<Prop, Object> propMap = new LinkedHashMap<>();
+    Prop.DIRECTORY.set(propMap, config.directory);
+    Prop.SCRIPT_DIRECTORY.set(propMap, config.directory);
+    Prop.HYBRID.set(propMap, true);
+    final Session session = new Session(propMap, typeSystem);
+    final Calcite calcite = Calcite.withJdbc(config.jdbc, schema);
+    final Map<String, ForeignValue> allForeign =
+        new LinkedHashMap<>(config.valueMap);
+    allForeign.putAll(calcite.foreignValues());
+    Environment env = Environments.env(typeSystem, session, allForeign);
+
+    final String targetName;
+    if (config.materialize != null) {
+      targetName = config.materialize;
+    } else {
+      terminal
+          .writer()
+          .println("--jdbc requires --output=<name> for the target");
+      terminal.writer().flush();
+      return;
+    }
+
+    final String code;
+    if (config.file != null) {
+      try {
+        code = Files.readString(Paths.get(config.file));
+      } catch (IOException e) {
+        terminal.writer().println("Cannot read file: " + e.getMessage());
+        terminal.writer().flush();
+        return;
+      }
+    } else {
+      code = config.eval.trim().endsWith(";") ? config.eval : config.eval + ";";
+    }
+
+    try {
+      final MorelParserImpl parser =
+          new MorelParserImpl(new StringReader(code));
+      parser.zero("jdbc");
+      final AstNode statement = parser.statementSemicolonSafe();
+      final Tracer tracer = Tracers.empty();
+      final CompiledStatement compiled =
+          Compiles.prepareStatement(
+              typeSystem, session, env, statement, calcite, w -> {}, tracer);
+      final Code plan = compiled.getCode();
+      if (plan == null) {
+        terminal.writer().println("No code produced");
+        terminal.writer().flush();
+        return;
+      }
+      final RelNode rel = Calcite.extractRelNode(plan);
+      if (rel == null) {
+        terminal.writer().println("Expression cannot be converted to SQL");
+        terminal.writer().flush();
+        return;
+      }
+      final List<String> ddls =
+          calcite.toIncrementalDdl(rel, dialect, targetName);
+      final DataSource ds = calcite.getDataSource();
+      if (ds == null) {
+        // No JDBC — just print DDL
+        ddls.forEach(ddl -> terminal.writer().println(ddl + ";\n"));
+        terminal.writer().flush();
+        return;
+      }
+      try (Connection conn = ds.getConnection();
+          Statement stmt = conn.createStatement()) {
+        for (String ddl : ddls) {
+          stmt.execute(ddl);
+        }
+      }
+      terminal.writer().println("Pipeline: " + targetName);
+    } catch (MorelParseException | CompileException e) {
+      terminal.writer().println(e.getMessage());
+    } catch (SQLException e) {
+      terminal.writer().println("JDBC error: " + e.getMessage());
+    } catch (RuntimeException e) {
+      terminal.writer().println("Error: " + e.getMessage());
+    }
+    terminal.writer().flush();
+  }
+
+  /** Infers the SQL dialect from a JDBC URL. */
+  private static SqlDialect inferDialect(String url) {
+    if (url.contains("clickhouse")) {
+      return ClickHouseSqlDialect.DEFAULT;
+    }
+    return ClickHouseSqlDialect.DEFAULT;
+  }
+
   /** Resolves a dialect name to a {@link SqlDialect}. */
   private static SqlDialect resolveDialect(@Nullable String name) {
     if (name == null) {
@@ -480,6 +581,13 @@ public class Shell {
   public void run() {
     if (config.help) {
       usage(terminal.writer()::println);
+      return;
+    }
+
+    if (config.jdbc != null
+        && config.materialize != null
+        && (config.eval != null || config.file != null)) {
+      runJdbc();
       return;
     }
 
