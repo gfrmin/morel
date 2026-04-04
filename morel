@@ -114,6 +114,10 @@ while [ $# -gt 0 ]; do
       JDBC="$1"
       shift
       ;;
+    (--materialize=*)
+      MATERIALIZE="$1"
+      shift
+      ;;
     (--foreign=*)
       FOREIGN="$FOREIGN $1"
       shift
@@ -208,6 +212,7 @@ case "$SUBCMD" in
            $FOREIGN \
            $DIALECT \
            $JDBC \
+           $MATERIALIZE \
            --directory="$(pwd)" \
            --terminal=dumb \
            --banner=false \

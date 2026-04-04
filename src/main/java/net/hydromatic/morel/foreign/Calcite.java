@@ -85,6 +85,14 @@ public class Calcite {
     return ImmutableMap.of();
   }
 
+  /**
+   * Returns the JDBC data source, or null if this context is not backed by
+   * JDBC.
+   */
+  public @Nullable DataSource getDataSource() {
+    return null;
+  }
+
   /** Creates a runtime context with the given data sets. */
   public static Calcite withDataSets(Map<String, DataSet> dataSetMap) {
     return new CalciteMap(dataSetMap);
@@ -196,9 +204,10 @@ public class Calcite {
   /** Extension to Calcite context that connects to a JDBC database. */
   private static class JdbcCalcite extends Calcite {
     final ImmutableMap<String, ForeignValue> valueMap;
+    final DataSource ds;
 
     JdbcCalcite(String url, String schema) {
-      final DataSource ds = JdbcSchema.dataSource(url, null, null, null);
+      this.ds = JdbcSchema.dataSource(url, null, "default", "");
       final JdbcSchema jdbcSchema =
           JdbcSchema.create(rootSchema, "db", ds, null, schema);
       rootSchema.add("db", jdbcSchema);
@@ -216,6 +225,11 @@ public class Calcite {
     @Override
     public Map<String, ForeignValue> foreignValues() {
       return valueMap;
+    }
+
+    @Override
+    public DataSource getDataSource() {
+      return ds;
     }
   }
 
@@ -301,9 +315,9 @@ public class Calcite {
    * CalciteCode}; returns null otherwise.
    */
   public static @Nullable RelNode extractRelNode(Code code) {
-    final Code stripped = Codes.strip(code);
-    if (stripped instanceof CalciteCode) {
-      return ((CalciteCode) stripped).rel;
+    final Code unwrapped = Codes.unwrapAll(code);
+    if (unwrapped instanceof CalciteCode) {
+      return ((CalciteCode) unwrapped).rel;
     }
     return null;
   }

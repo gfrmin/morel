@@ -32,6 +32,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.StringReader;
 import java.lang.reflect.InvocationTargetException;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -39,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import javax.sql.DataSource;
 import net.hydromatic.morel.ast.AstNode;
 import net.hydromatic.morel.ast.Pos;
 import net.hydromatic.morel.compile.CompileException;
@@ -184,6 +188,9 @@ public class Shell {
       if (arg.startsWith("--jdbc=")) {
         c = c.withJdbc(arg.substring("--jdbc=".length()));
       }
+      if (arg.startsWith("--materialize=")) {
+        c = c.withMaterialize(arg.substring("--materialize=".length()));
+      }
     }
 
     return c.withValueMap(ImmutableMap.copyOf(valueMapBuilder));
@@ -298,7 +305,12 @@ public class Shell {
       if (plan != null) {
         final RelNode rel = Calcite.extractRelNode(plan);
         if (rel != null) {
-          terminal.writer().println(calcite.toSql(rel, dialect));
+          final String sql = calcite.toSql(rel, dialect);
+          if (config.materialize != null) {
+            materialize(calcite, config.materialize, sql);
+          } else {
+            terminal.writer().println(sql);
+          }
           terminal.writer().flush();
           return;
         }
@@ -329,6 +341,30 @@ public class Shell {
       default:
         throw new IllegalArgumentException(
             "Unknown dialect: " + name + "; supported: clickhouse");
+    }
+  }
+
+  /**
+   * Materializes a query result as a new table by executing {@code CREATE TABLE
+   * ... AS SELECT} via JDBC.
+   */
+  private void materialize(
+      Calcite calcite, String tableSpec, String selectSql) {
+    final DataSource ds = calcite.getDataSource();
+    if (ds == null) {
+      terminal.writer().println("--materialize requires --jdbc");
+      return;
+    }
+    final String ddl =
+        "CREATE TABLE IF NOT EXISTS " + tableSpec + " AS\n" + selectSql;
+    try (Connection conn = ds.getConnection();
+        Statement stmt = conn.createStatement()) {
+      stmt.execute(ddl);
+      // Extract table name (first word of tableSpec)
+      final String tableName = tableSpec.split("\\s+")[0];
+      terminal.writer().println("Created " + tableName);
+    } catch (SQLException e) {
+      terminal.writer().println("Materialization failed: " + e.getMessage());
     }
   }
 
@@ -511,6 +547,8 @@ public class Shell {
     Config withDialect(@Nullable String dialect);
 
     Config withJdbc(@Nullable String jdbc);
+
+    Config withMaterialize(@Nullable String materialize);
   }
 
   /** Implementation of {@link Config}. */
@@ -527,6 +565,7 @@ public class Shell {
     private final @Nullable String eval;
     private final @Nullable String dialect;
     private final @Nullable String jdbc;
+    private final @Nullable String materialize;
 
     static final ConfigImpl DEFAULT =
         new ConfigImpl(
@@ -539,6 +578,7 @@ public class Shell {
             new File(""),
             Runnables.doNothing(),
             -1,
+            null,
             null,
             null,
             null);
@@ -555,7 +595,8 @@ public class Shell {
         int maxUseDepth,
         @Nullable String eval,
         @Nullable String dialect,
-        @Nullable String jdbc) {
+        @Nullable String jdbc,
+        @Nullable String materialize) {
       this.banner = banner;
       this.dumb = dumb;
       this.system = system;
@@ -568,6 +609,7 @@ public class Shell {
       this.eval = eval;
       this.dialect = dialect;
       this.jdbc = jdbc;
+      this.materialize = materialize;
     }
 
     @Override
@@ -587,7 +629,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -607,7 +650,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -627,7 +671,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -647,7 +692,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -667,7 +713,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -689,7 +736,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -709,7 +757,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -729,7 +778,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -749,7 +799,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -769,7 +820,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -789,7 +841,8 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
     }
 
     @Override
@@ -809,7 +862,29 @@ public class Shell {
           maxUseDepth,
           eval,
           dialect,
-          jdbc);
+          jdbc,
+          materialize);
+    }
+
+    @Override
+    public ConfigImpl withMaterialize(@Nullable String materialize) {
+      if (Objects.equals(this.materialize, materialize)) {
+        return this;
+      }
+      return new ConfigImpl(
+          banner,
+          dumb,
+          system,
+          echo,
+          help,
+          valueMap,
+          directory,
+          pauseFn,
+          maxUseDepth,
+          eval,
+          dialect,
+          jdbc,
+          materialize);
     }
   }
 

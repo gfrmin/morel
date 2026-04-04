@@ -4720,6 +4720,23 @@ public abstract class Codes {
     }
   }
 
+  /**
+   * Unwraps all wrapper layers from a {@code Code} to find the innermost code
+   * node. Unlike {@link #strip(Code)}, this also removes {@link
+   * GlobalMarshalCode} wrappers.
+   */
+  public static Code unwrapAll(Code code) {
+    for (; ; ) {
+      if (code instanceof WrapRelList) {
+        code = ((WrapRelList) code).code;
+      } else if (code instanceof GlobalMarshalCode) {
+        code = ((GlobalMarshalCode) code).body;
+      } else {
+        return code;
+      }
+    }
+  }
+
   /** Returns a Code that evaluates to the same value in all environments. */
   public static Code constant(Object value) {
     return new ConstantCode(value);
