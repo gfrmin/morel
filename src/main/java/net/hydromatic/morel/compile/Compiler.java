@@ -139,6 +139,16 @@ public class Compiler {
       public void getBindings(Consumer<Binding> outBindings) {
         bindings.forEach(outBindings);
       }
+
+      @Override
+      public @Nullable Code getCode() {
+        for (Action action : actions) {
+          if (action instanceof ActionImpl) {
+            return ((ActionImpl) action).code;
+          }
+        }
+        return null;
+      }
     };
   }
 

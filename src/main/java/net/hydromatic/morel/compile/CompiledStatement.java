@@ -19,9 +19,11 @@
 package net.hydromatic.morel.compile;
 
 import java.util.function.Consumer;
+import net.hydromatic.morel.eval.Code;
 import net.hydromatic.morel.eval.Session;
 import net.hydromatic.morel.type.Binding;
 import net.hydromatic.morel.type.Type;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * Statement that has been compiled and is ready to be run from the REPL.
@@ -58,6 +60,14 @@ public interface CompiledStatement {
    * @param outBindings Consumer to receive the bindings
    */
   void getBindings(Consumer<Binding> outBindings);
+
+  /**
+   * Returns the compiled {@link Code} for this statement, or null if not
+   * available. The code can be inspected without evaluating it.
+   */
+  default @Nullable Code getCode() {
+    return null;
+  }
 }
 
 // End CompiledStatement.java

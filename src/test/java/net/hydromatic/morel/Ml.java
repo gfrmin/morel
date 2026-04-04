@@ -364,28 +364,55 @@ class Ml {
     return this;
   }
 
-  /** Asserts that the generated SQL matches the given matcher. */
+  /**
+   * Asserts that the generated SQL matches the given matcher.
+   *
+   * <p>Tries the HYBRID compilation path first (handles overloaded operators),
+   * then falls back to direct {@code toRel()} for JDBC-backed foreign values.
+   */
   Ml assertSql(SqlDialect dialect, Matcher<String> matcher) {
+    final TypeSystem typeSystem = new TypeSystem();
+    final Calcite calcite = Calcite.withDataSets(dataSetMap);
+
+    // Try HYBRID path first (resolves overloaded operators).
+    final Map<Prop, Object> hybridProps = new LinkedHashMap<>(propMap);
+    Prop.HYBRID.set(hybridProps, true);
+    final Session session = new Session(hybridProps, typeSystem);
+    final Environment env =
+        Environments.env(typeSystem, session, calcite.foreignValues());
     final MorelParserImpl parser = new MorelParserImpl(new StringReader(ml));
     final AstNode statement = parser.statementEofSafe();
-    final TypeSystem typeSystem = new TypeSystem();
+    final CompiledStatement compiled =
+        Compiles.prepareStatement(
+            typeSystem,
+            session,
+            env,
+            statement,
+            calcite,
+            w -> {},
+            Tracers.empty());
+    final Code code = compiled.getCode();
+    if (code != null) {
+      final RelNode rel = Calcite.extractRelNode(code);
+      if (rel != null) {
+        assertThat(calcite.toSql(rel, dialect), matcher);
+        return this;
+      }
+    }
 
-    final Calcite calcite = Calcite.withDataSets(dataSetMap);
+    // Fall back to direct toRel() for JDBC-backed sources.
+    final MorelParserImpl parser2 = new MorelParserImpl(new StringReader(ml));
+    final AstNode statement2 = parser2.statementEofSafe();
     final TypeResolver.Resolved resolved =
         Compiles.validateExpression(
-            statement, propMap, calcite.foreignValues(), w -> {});
-    final Environment env = resolved.env;
-    final Ast.ValDecl valDecl2 = (Ast.ValDecl) resolved.node;
-    final Session session = null;
-    final Resolver resolver = Resolver.of(resolved.typeMap, env, session);
-    final Core.ValDecl valDecl3 = resolver.toCore(valDecl2);
-    assertThat(valDecl3, instanceOf(Core.NonRecValDecl.class));
+            statement2, propMap, calcite.foreignValues(), w -> {});
+    final Resolver resolver = Resolver.of(resolved.typeMap, resolved.env, null);
+    final Core.ValDecl valDecl = resolver.toCore((Ast.ValDecl) resolved.node);
     final RelNode rel =
         new CalciteCompiler(typeSystem, calcite)
-            .toRel(env, Compiles.toExp((Core.NonRecValDecl) valDecl3));
-    requireNonNull(rel);
-    final String sql = calcite.toSql(rel, dialect);
-    assertThat(sql, matcher);
+            .toRel(resolved.env, Compiles.toExp((Core.NonRecValDecl) valDecl));
+    requireNonNull(rel, "expression cannot be converted to SQL");
+    assertThat(calcite.toSql(rel, dialect), matcher);
     return this;
   }
 

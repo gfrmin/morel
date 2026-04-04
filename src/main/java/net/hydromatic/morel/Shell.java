@@ -39,20 +39,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
-import net.hydromatic.morel.ast.Ast;
 import net.hydromatic.morel.ast.AstNode;
-import net.hydromatic.morel.ast.Core;
 import net.hydromatic.morel.ast.Pos;
-import net.hydromatic.morel.compile.CalciteCompiler;
 import net.hydromatic.morel.compile.CompileException;
 import net.hydromatic.morel.compile.CompiledStatement;
 import net.hydromatic.morel.compile.Compiles;
 import net.hydromatic.morel.compile.Environment;
 import net.hydromatic.morel.compile.Environments;
-import net.hydromatic.morel.compile.Resolver;
 import net.hydromatic.morel.compile.Tracer;
 import net.hydromatic.morel.compile.Tracers;
-import net.hydromatic.morel.compile.TypeResolver;
+import net.hydromatic.morel.eval.Code;
 import net.hydromatic.morel.eval.Codes;
 import net.hydromatic.morel.eval.Prop;
 import net.hydromatic.morel.eval.Session;
@@ -257,13 +253,20 @@ public class Shell {
   /**
    * Compiles an expression to SQL in the configured dialect and prints the
    * result.
+   *
+   * <p>Uses the HYBRID compilation path so that overloaded operators are fully
+   * resolved before generating the Calcite relational plan.
    */
   private void runToSql() {
     final SqlDialect dialect = resolveDialect(config.dialect);
     final TypeSystem typeSystem = new TypeSystem();
     final Map<Prop, Object> propMap = new LinkedHashMap<>();
     Prop.DIRECTORY.set(propMap, config.directory);
+    Prop.SCRIPT_DIRECTORY.set(propMap, config.directory);
+    Prop.HYBRID.set(propMap, true);
+    final Session session = new Session(propMap, typeSystem);
     final Calcite calcite = Calcite.withDataSets(ImmutableMap.of());
+    Environment env = Environments.env(typeSystem, session, config.valueMap);
 
     String code = config.eval;
     if (!code.trim().endsWith(";")) {
@@ -275,21 +278,24 @@ public class Shell {
           new MorelParserImpl(new StringReader(code));
       parser.zero("eval");
       final AstNode statement = parser.statementSemicolonSafe();
-      final TypeResolver.Resolved resolved =
-          Compiles.validateExpression(
-              statement, propMap, calcite.foreignValues(), w -> {});
-      final Environment env = resolved.env;
-      final Ast.ValDecl valDecl = (Ast.ValDecl) resolved.node;
-      final Resolver resolver = Resolver.of(resolved.typeMap, env, null);
-      final Core.ValDecl coreDecl = resolver.toCore(valDecl);
-      final RelNode rel =
-          new CalciteCompiler(typeSystem, calcite)
-              .toRel(env, Compiles.toExp((Core.NonRecValDecl) coreDecl));
-      if (rel == null) {
-        terminal.writer().println("Expression cannot be converted to SQL");
-      } else {
-        terminal.writer().println(calcite.toSql(rel, dialect));
+      final Tracer tracer = Tracers.empty();
+      final CompiledStatement compiled =
+          Compiles.prepareStatement(
+              typeSystem, session, env, statement, calcite, w -> {}, tracer);
+      final Code plan = compiled.getCode();
+      if (plan != null) {
+        final RelNode rel = Calcite.extractRelNode(plan);
+        if (rel != null) {
+          terminal.writer().println(calcite.toSql(rel, dialect));
+          terminal.writer().flush();
+          return;
+        }
       }
+      terminal
+          .writer()
+          .println(
+              "Expression cannot be converted to SQL"
+                  + (plan == null ? " (no code)" : ""));
     } catch (MorelParseException | CompileException e) {
       terminal.writer().println(e.getMessage());
     } catch (RuntimeException e) {

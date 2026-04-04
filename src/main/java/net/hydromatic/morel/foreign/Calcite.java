@@ -257,6 +257,18 @@ public class Calcite {
   }
 
   /**
+   * Extracts the {@link RelNode} from a {@link Code} if it is a {@code
+   * CalciteCode}; returns null otherwise.
+   */
+  public static @Nullable RelNode extractRelNode(Code code) {
+    final Code stripped = Codes.strip(code);
+    if (stripped instanceof CalciteCode) {
+      return ((CalciteCode) stripped).rel;
+    }
+    return null;
+  }
+
+  /**
    * Type system whose {@link #shouldConvertRaggedUnionTypesToVarying()} returns
    * {@code true}.
    *

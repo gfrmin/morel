@@ -974,6 +974,47 @@ public class AlgebraTest {
         .withBinding("scott", BuiltInDataSet.SCOTT)
         .assertSql(ClickHouseSqlDialect.DEFAULT, is(sql));
   }
+  /** Tests generating ClickHouse SQL with a filter. */
+  @Test
+  void testToSqlFilter() {
+    final String ml =
+        "from e in [{name=\"Alice\", sal=1000},"
+            + " {name=\"Bob\", sal=2000}]"
+            + " where e.sal > 1500 yield e.name";
+    final String sql =
+        "SELECT `name`\n" //
+            + "FROM (SELECT 'Alice' AS `name`, 1000 AS `sal`\n"
+            + "UNION ALL\n"
+            + "SELECT 'Bob' AS `name`, 2000 AS `sal`) AS `t`\n"
+            + "WHERE `sal` > 1500";
+    ml(ml).assertSql(ClickHouseSqlDialect.DEFAULT, is(sql));
+  }
+
+  /** Tests generating ClickHouse SQL with a join. */
+  @Test
+  void testToSqlJoin() {
+    final String ml =
+        "from e in [{id=1, name=\"A\", did=10},"
+            + " {id=2, name=\"B\", did=20}]"
+            + " join d in [{did=10, dname=\"X\"},"
+            + " {did=20, dname=\"Y\"}]"
+            + " on e.did = d.did"
+            + " yield {e.name, d.dname}";
+    final String sql =
+        "SELECT `t0`.`dname`, `t`.`name`\n" //
+            + "FROM (SELECT 10 AS `did`, 1 AS `id`,"
+            + " 'A' AS `name`\n"
+            + "UNION ALL\n"
+            + "SELECT 20 AS `did`, 2 AS `id`,"
+            + " 'B' AS `name`) AS `t`\n"
+            + "INNER JOIN (SELECT 10 AS `did`,"
+            + " 'X' AS `dname`\n"
+            + "UNION ALL\n"
+            + "SELECT 20 AS `did`,"
+            + " 'Y' AS `dname`) AS `t0`"
+            + " ON `t`.`did` = `t0`.`did`";
+    ml(ml).assertSql(ClickHouseSqlDialect.DEFAULT, is(sql));
+  }
 }
 
 // End AlgebraTest.java
