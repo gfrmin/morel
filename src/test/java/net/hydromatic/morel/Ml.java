@@ -70,6 +70,7 @@ import net.hydromatic.morel.type.TypeSystem;
 import net.hydromatic.morel.util.Pair;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.sql.SqlDialect;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.hamcrest.CustomTypeSafeMatcher;
 import org.hamcrest.Matcher;
@@ -360,6 +361,31 @@ class Ml {
     requireNonNull(rel);
     final String relString = RelOptUtil.toString(rel);
     assertThat(relString, matcher);
+    return this;
+  }
+
+  /** Asserts that the generated SQL matches the given matcher. */
+  Ml assertSql(SqlDialect dialect, Matcher<String> matcher) {
+    final MorelParserImpl parser = new MorelParserImpl(new StringReader(ml));
+    final AstNode statement = parser.statementEofSafe();
+    final TypeSystem typeSystem = new TypeSystem();
+
+    final Calcite calcite = Calcite.withDataSets(dataSetMap);
+    final TypeResolver.Resolved resolved =
+        Compiles.validateExpression(
+            statement, propMap, calcite.foreignValues(), w -> {});
+    final Environment env = resolved.env;
+    final Ast.ValDecl valDecl2 = (Ast.ValDecl) resolved.node;
+    final Session session = null;
+    final Resolver resolver = Resolver.of(resolved.typeMap, env, session);
+    final Core.ValDecl valDecl3 = resolver.toCore(valDecl2);
+    assertThat(valDecl3, instanceOf(Core.NonRecValDecl.class));
+    final RelNode rel =
+        new CalciteCompiler(typeSystem, calcite)
+            .toRel(env, Compiles.toExp((Core.NonRecValDecl) valDecl3));
+    requireNonNull(rel);
+    final String sql = calcite.toSql(rel, dialect);
+    assertThat(sql, matcher);
     return this;
   }
 

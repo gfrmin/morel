@@ -45,9 +45,11 @@ import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
+import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
 import org.apache.calcite.rel.type.DelegatingTypeSystem;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.schema.SchemaPlus;
+import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql2rel.RelDecorrelator;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Program;
@@ -109,6 +111,28 @@ public class Calcite {
     final Function<Enumerable<Object[]>, List<Object>> converter =
         Converters.fromEnumerable(rel, type);
     return new CalciteCode(dataContext, rel2, env, converter);
+  }
+
+  /**
+   * Converts a Calcite relational expression to a SQL string in the given
+   * dialect.
+   */
+  public String toSql(RelNode rel, SqlDialect dialect) {
+    final Program program =
+        Programs.sequence(
+            Programs.subQuery(DefaultRelMetadataProvider.INSTANCE),
+            new DecorrelateProgram());
+    final RelOptPlanner planner = rel.getCluster().getPlanner();
+    final RelTraitSet traitSet = rel.getCluster().traitSet();
+    final RelNode rel2 =
+        program.run(
+            planner, rel, traitSet, ImmutableList.of(), ImmutableList.of());
+    final RelToSqlConverter converter = new RelToSqlConverter(dialect);
+    return converter
+        .visitRoot(rel2)
+        .asQueryOrValues()
+        .toSqlString(dialect)
+        .getSql();
   }
 
   /** Copied from {@link Programs}. */

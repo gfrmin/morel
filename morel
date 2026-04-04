@@ -106,6 +106,10 @@ while [ $# -gt 0 ]; do
       SUBCMD=smli
       shift
       ;;
+    (--dialect=*)
+      DIALECT="$1"
+      shift
+      ;;
     (--foreign=*)
       FOREIGN="$FOREIGN $1"
       shift
@@ -194,6 +198,7 @@ case "$SUBCMD" in
       exec java $VM_OPTS -cp "${CP}" $JAVA_OPTS net.hydromatic.morel.Shell \
            "$DEFAULT_FOREIGN" \
            $FOREIGN \
+           $DIALECT \
            --directory="$(pwd)" \
            --terminal=dumb \
            --banner=false \

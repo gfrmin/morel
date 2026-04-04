@@ -39,15 +39,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import net.hydromatic.morel.ast.Ast;
 import net.hydromatic.morel.ast.AstNode;
+import net.hydromatic.morel.ast.Core;
 import net.hydromatic.morel.ast.Pos;
+import net.hydromatic.morel.compile.CalciteCompiler;
 import net.hydromatic.morel.compile.CompileException;
 import net.hydromatic.morel.compile.CompiledStatement;
 import net.hydromatic.morel.compile.Compiles;
 import net.hydromatic.morel.compile.Environment;
 import net.hydromatic.morel.compile.Environments;
+import net.hydromatic.morel.compile.Resolver;
 import net.hydromatic.morel.compile.Tracer;
 import net.hydromatic.morel.compile.Tracers;
+import net.hydromatic.morel.compile.TypeResolver;
 import net.hydromatic.morel.eval.Codes;
 import net.hydromatic.morel.eval.Prop;
 import net.hydromatic.morel.eval.Session;
@@ -61,6 +66,9 @@ import net.hydromatic.morel.type.TypeSystem;
 import net.hydromatic.morel.util.JavaVersion;
 import net.hydromatic.morel.util.MorelException;
 import net.hydromatic.morel.util.Pair;
+import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.sql.SqlDialect;
+import org.apache.calcite.sql.dialect.ClickHouseSqlDialect;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
@@ -174,6 +182,9 @@ public class Shell {
       if (arg.startsWith("--eval=")) {
         c = c.withEval(arg.substring("--eval=".length()));
       }
+      if (arg.startsWith("--dialect=")) {
+        c = c.withDialect(arg.substring("--dialect=".length()));
+      }
     }
 
     return c.withValueMap(ImmutableMap.copyOf(valueMapBuilder));
@@ -201,6 +212,10 @@ public class Shell {
 
   /** Evaluates a single expression and prints the result. */
   private void runEval() {
+    if (config.dialect != null) {
+      runToSql();
+      return;
+    }
     final TypeSystem typeSystem = new TypeSystem();
     final Map<Prop, Object> map = new LinkedHashMap<>();
     Prop.DIRECTORY.set(map, config.directory);
@@ -237,6 +252,66 @@ public class Shell {
       terminal.writer().println(e.getMessage());
     }
     terminal.writer().flush();
+  }
+
+  /**
+   * Compiles an expression to SQL in the configured dialect and prints the
+   * result.
+   */
+  private void runToSql() {
+    final SqlDialect dialect = resolveDialect(config.dialect);
+    final TypeSystem typeSystem = new TypeSystem();
+    final Map<Prop, Object> propMap = new LinkedHashMap<>();
+    Prop.DIRECTORY.set(propMap, config.directory);
+    final Calcite calcite = Calcite.withDataSets(ImmutableMap.of());
+
+    String code = config.eval;
+    if (!code.trim().endsWith(";")) {
+      code = code + ";";
+    }
+
+    try {
+      final MorelParserImpl parser =
+          new MorelParserImpl(new StringReader(code));
+      parser.zero("eval");
+      final AstNode statement = parser.statementSemicolonSafe();
+      final TypeResolver.Resolved resolved =
+          Compiles.validateExpression(
+              statement, propMap, calcite.foreignValues(), w -> {});
+      final Environment env = resolved.env;
+      final Ast.ValDecl valDecl = (Ast.ValDecl) resolved.node;
+      final Resolver resolver = Resolver.of(resolved.typeMap, env, null);
+      final Core.ValDecl coreDecl = resolver.toCore(valDecl);
+      final RelNode rel =
+          new CalciteCompiler(typeSystem, calcite)
+              .toRel(env, Compiles.toExp((Core.NonRecValDecl) coreDecl));
+      if (rel == null) {
+        terminal.writer().println("Expression cannot be converted to SQL");
+      } else {
+        terminal.writer().println(calcite.toSql(rel, dialect));
+      }
+    } catch (MorelParseException | CompileException e) {
+      terminal.writer().println(e.getMessage());
+    } catch (RuntimeException e) {
+      terminal
+          .writer()
+          .println("Expression cannot be converted to SQL: " + e.getMessage());
+    }
+    terminal.writer().flush();
+  }
+
+  /** Resolves a dialect name to a {@link SqlDialect}. */
+  private static SqlDialect resolveDialect(@Nullable String name) {
+    if (name == null) {
+      return ClickHouseSqlDialect.DEFAULT;
+    }
+    switch (name.toLowerCase()) {
+      case "clickhouse":
+        return ClickHouseSqlDialect.DEFAULT;
+      default:
+        throw new IllegalArgumentException(
+            "Unknown dialect: " + name + "; supported: clickhouse");
+    }
   }
 
   /**
@@ -391,6 +466,8 @@ public class Shell {
     Config withMaxUseDepth(int maxUseDepth);
 
     Config withEval(@Nullable String eval);
+
+    Config withDialect(@Nullable String dialect);
   }
 
   /** Implementation of {@link Config}. */
@@ -405,6 +482,7 @@ public class Shell {
     private final Runnable pauseFn;
     private final int maxUseDepth;
     private final @Nullable String eval;
+    private final @Nullable String dialect;
 
     static final ConfigImpl DEFAULT =
         new ConfigImpl(
@@ -417,6 +495,7 @@ public class Shell {
             new File(""),
             Runnables.doNothing(),
             -1,
+            null,
             null);
 
     private ConfigImpl(
@@ -429,7 +508,8 @@ public class Shell {
         File directory,
         Runnable pauseFn,
         int maxUseDepth,
-        @Nullable String eval) {
+        @Nullable String eval,
+        @Nullable String dialect) {
       this.banner = banner;
       this.dumb = dumb;
       this.system = system;
@@ -440,6 +520,7 @@ public class Shell {
       this.pauseFn = requireNonNull(pauseFn, "pauseFn");
       this.maxUseDepth = maxUseDepth;
       this.eval = eval;
+      this.dialect = dialect;
     }
 
     @Override
@@ -457,7 +538,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -475,7 +557,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -493,7 +576,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -511,7 +595,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -529,7 +614,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -549,7 +635,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -567,7 +654,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -585,7 +673,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -603,7 +692,8 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
     }
 
     @Override
@@ -621,7 +711,27 @@ public class Shell {
           directory,
           pauseFn,
           maxUseDepth,
-          eval);
+          eval,
+          dialect);
+    }
+
+    @Override
+    public ConfigImpl withDialect(@Nullable String dialect) {
+      if (Objects.equals(this.dialect, dialect)) {
+        return this;
+      }
+      return new ConfigImpl(
+          banner,
+          dumb,
+          system,
+          echo,
+          help,
+          valueMap,
+          directory,
+          pauseFn,
+          maxUseDepth,
+          eval,
+          dialect);
     }
   }
 

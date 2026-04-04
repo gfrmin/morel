@@ -29,6 +29,7 @@ import static org.hamcrest.core.Is.is;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import net.hydromatic.morel.eval.Prop;
+import org.apache.calcite.sql.dialect.ClickHouseSqlDialect;
 import org.junit.jupiter.api.Test;
 
 /** Tests translation of Morel programs to Apache Calcite relational algebra. */
@@ -933,6 +934,45 @@ public class AlgebraTest {
                 list(7934, "MILLER", 2, 7782),
                 list(7876, "ADAMS", 3, 7788),
                 list(7369, "SMITH", 3, 7902)));
+  }
+  /** Tests generating ClickHouse SQL from a projection. */
+  @Test
+  void testToSqlProject() {
+    final String sql =
+        "SELECT `DEPTNO` AS `deptno`\n" //
+            + "FROM `SCOTT`.`EMP`";
+    ml("from e in scott.emps yield e.deptno")
+        .withBinding("scott", BuiltInDataSet.SCOTT)
+        .assertSql(ClickHouseSqlDialect.DEFAULT, is(sql));
+  }
+
+  /** Tests generating ClickHouse SQL with multiple columns. */
+  @Test
+  void testToSqlMultiColumn() {
+    final String sql =
+        "SELECT `DEPTNO` AS `deptno`," //
+            + " `EMPNO` AS `empno`\n"
+            + "FROM `SCOTT`.`EMP`";
+    ml("from e in scott.emps yield {e.empno, e.deptno}")
+        .withBinding("scott", BuiltInDataSet.SCOTT)
+        .assertSql(ClickHouseSqlDialect.DEFAULT, is(sql));
+  }
+
+  /** Tests generating ClickHouse SQL with order and limit. */
+  @Test
+  void testToSqlOrderLimit() {
+    final String sql =
+        "SELECT `DEPTNO` AS `deptno`," //
+            + " `EMPNO` AS `empno`\n"
+            + "FROM `SCOTT`.`EMP`\n"
+            + "ORDER BY `EMPNO` DESC NULLS FIRST\n"
+            + "LIMIT 2, 4";
+    ml("from e in scott.emps"
+            + " yield {e.empno, e.deptno}"
+            + " order DESC empno"
+            + " skip 2 take 4")
+        .withBinding("scott", BuiltInDataSet.SCOTT)
+        .assertSql(ClickHouseSqlDialect.DEFAULT, is(sql));
   }
 }
 
