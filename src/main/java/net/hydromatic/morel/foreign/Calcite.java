@@ -18,11 +18,14 @@
  */
 package net.hydromatic.morel.foreign;
 
+import static java.util.Objects.requireNonNull;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import javax.sql.DataSource;
 import net.hydromatic.morel.compile.Environment;
 import net.hydromatic.morel.eval.Code;
 import net.hydromatic.morel.eval.Codes;
@@ -32,6 +35,7 @@ import net.hydromatic.morel.type.Type;
 import net.hydromatic.morel.util.ThreadLocals;
 import org.apache.calcite.DataContext;
 import org.apache.calcite.adapter.java.JavaTypeFactory;
+import org.apache.calcite.adapter.jdbc.JdbcSchema;
 import org.apache.calcite.config.CalciteConnectionConfig;
 import org.apache.calcite.interpreter.Interpreter;
 import org.apache.calcite.jdbc.CalciteSchema;
@@ -84,6 +88,16 @@ public class Calcite {
   /** Creates a runtime context with the given data sets. */
   public static Calcite withDataSets(Map<String, DataSet> dataSetMap) {
     return new CalciteMap(dataSetMap);
+  }
+
+  /**
+   * Creates a runtime context backed by a JDBC connection.
+   *
+   * <p>The JDBC schema is registered in the Calcite root schema and exposed as
+   * a foreign value named {@code "db"}.
+   */
+  public static Calcite withJdbc(String url, String schema) {
+    return new JdbcCalcite(url, schema);
   }
 
   /** Creates an empty RelBuilder. */
@@ -171,6 +185,32 @@ public class Calcite {
       dataSetMap.forEach(
           (name, dataSet) -> b.put(name, dataSet.foreignValue(this)));
       this.valueMap = b.build();
+    }
+
+    @Override
+    public Map<String, ForeignValue> foreignValues() {
+      return valueMap;
+    }
+  }
+
+  /** Extension to Calcite context that connects to a JDBC database. */
+  private static class JdbcCalcite extends Calcite {
+    final ImmutableMap<String, ForeignValue> valueMap;
+
+    JdbcCalcite(String url, String schema) {
+      final DataSource ds = JdbcSchema.dataSource(url, null, null, null);
+      final JdbcSchema jdbcSchema =
+          JdbcSchema.create(rootSchema, "db", ds, null, schema);
+      rootSchema.add("db", jdbcSchema);
+      final SchemaPlus schemaPlus =
+          requireNonNull(rootSchema.getSubSchema("db"));
+      this.valueMap =
+          ImmutableMap.of(
+              "db",
+              new CalciteForeignValue(
+                  this,
+                  schemaPlus,
+                  CalciteForeignValue.NameConverter.TO_LOWER));
     }
 
     @Override

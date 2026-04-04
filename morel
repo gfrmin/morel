@@ -110,6 +110,10 @@ while [ $# -gt 0 ]; do
       DIALECT="$1"
       shift
       ;;
+    (--jdbc=*)
+      JDBC="$1"
+      shift
+      ;;
     (--foreign=*)
       FOREIGN="$FOREIGN $1"
       shift
@@ -155,6 +159,10 @@ fi
 CP="target/classes:\
 target/test-classes:\
 $(cat target/classpath.txt)"
+# Append user's CLASSPATH for external JDBC drivers etc.
+if [ -n "$CLASSPATH" ]; then
+  CP="${CP}:${CLASSPATH}"
+fi
 
 VM_OPTS=
 if [ "$cygwin" ]; then
@@ -199,6 +207,7 @@ case "$SUBCMD" in
            "$DEFAULT_FOREIGN" \
            $FOREIGN \
            $DIALECT \
+           $JDBC \
            --directory="$(pwd)" \
            --terminal=dumb \
            --banner=false \

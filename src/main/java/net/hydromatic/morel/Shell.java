@@ -181,6 +181,9 @@ public class Shell {
       if (arg.startsWith("--dialect=")) {
         c = c.withDialect(arg.substring("--dialect=".length()));
       }
+      if (arg.startsWith("--jdbc=")) {
+        c = c.withJdbc(arg.substring("--jdbc=".length()));
+      }
     }
 
     return c.withValueMap(ImmutableMap.copyOf(valueMapBuilder));
@@ -265,8 +268,17 @@ public class Shell {
     Prop.SCRIPT_DIRECTORY.set(propMap, config.directory);
     Prop.HYBRID.set(propMap, true);
     final Session session = new Session(propMap, typeSystem);
-    final Calcite calcite = Calcite.withDataSets(ImmutableMap.of());
-    Environment env = Environments.env(typeSystem, session, config.valueMap);
+    final Calcite calcite;
+    if (config.jdbc != null) {
+      final String schema = extractSchema(config.jdbc);
+      calcite = Calcite.withJdbc(config.jdbc, schema);
+    } else {
+      calcite = Calcite.withDataSets(ImmutableMap.of());
+    }
+    final Map<String, ForeignValue> allForeign =
+        new LinkedHashMap<>(config.valueMap);
+    allForeign.putAll(calcite.foreignValues());
+    Environment env = Environments.env(typeSystem, session, allForeign);
 
     String code = config.eval;
     if (!code.trim().endsWith(";")) {
@@ -318,6 +330,29 @@ public class Shell {
         throw new IllegalArgumentException(
             "Unknown dialect: " + name + "; supported: clickhouse");
     }
+  }
+
+  /**
+   * Extracts the schema/database name from a JDBC URL.
+   *
+   * <p>For example, from {@code jdbc:clickhouse://host:8123/mydb} extracts
+   * {@code "mydb"}.
+   */
+  private static String extractSchema(String url) {
+    // Find the last '/' in the URL path
+    int lastSlash = url.lastIndexOf('/');
+    if (lastSlash >= 0 && lastSlash < url.length() - 1) {
+      String tail = url.substring(lastSlash + 1);
+      // Remove query parameters if any
+      int q = tail.indexOf('?');
+      if (q >= 0) {
+        tail = tail.substring(0, q);
+      }
+      if (!tail.isEmpty()) {
+        return tail;
+      }
+    }
+    return "default";
   }
 
   /**
@@ -474,6 +509,8 @@ public class Shell {
     Config withEval(@Nullable String eval);
 
     Config withDialect(@Nullable String dialect);
+
+    Config withJdbc(@Nullable String jdbc);
   }
 
   /** Implementation of {@link Config}. */
@@ -489,6 +526,7 @@ public class Shell {
     private final int maxUseDepth;
     private final @Nullable String eval;
     private final @Nullable String dialect;
+    private final @Nullable String jdbc;
 
     static final ConfigImpl DEFAULT =
         new ConfigImpl(
@@ -501,6 +539,7 @@ public class Shell {
             new File(""),
             Runnables.doNothing(),
             -1,
+            null,
             null,
             null);
 
@@ -515,7 +554,8 @@ public class Shell {
         Runnable pauseFn,
         int maxUseDepth,
         @Nullable String eval,
-        @Nullable String dialect) {
+        @Nullable String dialect,
+        @Nullable String jdbc) {
       this.banner = banner;
       this.dumb = dumb;
       this.system = system;
@@ -527,6 +567,7 @@ public class Shell {
       this.maxUseDepth = maxUseDepth;
       this.eval = eval;
       this.dialect = dialect;
+      this.jdbc = jdbc;
     }
 
     @Override
@@ -545,7 +586,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -564,7 +606,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -583,7 +626,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -602,7 +646,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -621,7 +666,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -642,7 +688,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -661,7 +708,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -680,7 +728,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -699,7 +748,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -718,7 +768,8 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
     }
 
     @Override
@@ -737,7 +788,28 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect);
+          dialect,
+          jdbc);
+    }
+
+    @Override
+    public ConfigImpl withJdbc(@Nullable String jdbc) {
+      if (Objects.equals(this.jdbc, jdbc)) {
+        return this;
+      }
+      return new ConfigImpl(
+          banner,
+          dumb,
+          system,
+          echo,
+          help,
+          valueMap,
+          directory,
+          pauseFn,
+          maxUseDepth,
+          eval,
+          dialect,
+          jdbc);
     }
   }
 
