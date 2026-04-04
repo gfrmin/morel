@@ -32,6 +32,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.StringReader;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -191,6 +193,12 @@ public class Shell {
       if (arg.startsWith("--materialize=")) {
         c = c.withMaterialize(arg.substring("--materialize=".length()));
       }
+      if (arg.startsWith("--file=")) {
+        c = c.withFile(arg.substring("--file=".length()));
+      }
+      if (arg.endsWith(".sml") && !arg.startsWith("--")) {
+        c = c.withFile(arg);
+      }
     }
 
     return c.withValueMap(ImmutableMap.copyOf(valueMapBuilder));
@@ -287,20 +295,72 @@ public class Shell {
     allForeign.putAll(calcite.foreignValues());
     Environment env = Environments.env(typeSystem, session, allForeign);
 
-    String code = config.eval;
-    if (!code.trim().endsWith(";")) {
-      code = code + ";";
+    final String code;
+    if (config.file != null) {
+      try {
+        code = Files.readString(Paths.get(config.file));
+      } catch (IOException e) {
+        terminal.writer().println("Cannot read file: " + e.getMessage());
+        terminal.writer().flush();
+        return;
+      }
+    } else if (config.eval != null) {
+      code = config.eval.trim().endsWith(";") ? config.eval : config.eval + ";";
+    } else {
+      terminal.writer().println("--dialect requires -e or a .sml file");
+      terminal.writer().flush();
+      return;
     }
 
     try {
       final MorelParserImpl parser =
           new MorelParserImpl(new StringReader(code));
-      parser.zero("eval");
-      final AstNode statement = parser.statementSemicolonSafe();
+      parser.zero("transform");
+
+      // Parse all statements, evaluate intermediate ones,
+      // generate SQL for the last.
+      AstNode lastStatement = null;
+      for (; ; ) {
+        final AstNode statement = parser.statementSemicolonOrEofSafe();
+        if (statement == null) {
+          break;
+        }
+        if (lastStatement != null) {
+          // Evaluate the previous statement to build env
+          final Tracer tracer = Tracers.empty();
+          final CompiledStatement compiled =
+              Compiles.prepareStatement(
+                  typeSystem,
+                  session,
+                  env,
+                  lastStatement,
+                  calcite,
+                  w -> {},
+                  tracer);
+          final List<Binding> bindings = new ArrayList<>();
+          compiled.eval(session, env, line -> {}, bindings::add);
+          env = env.bindAll(bindings);
+        }
+        lastStatement = statement;
+      }
+
+      if (lastStatement == null) {
+        terminal.writer().println("No statements found");
+        terminal.writer().flush();
+        return;
+      }
+
+      // Generate SQL for the last statement
       final Tracer tracer = Tracers.empty();
       final CompiledStatement compiled =
           Compiles.prepareStatement(
-              typeSystem, session, env, statement, calcite, w -> {}, tracer);
+              typeSystem,
+              session,
+              env,
+              lastStatement,
+              calcite,
+              w -> {},
+              tracer);
       final Code plan = compiled.getCode();
       if (plan != null) {
         final RelNode rel = Calcite.extractRelNode(plan);
@@ -428,6 +488,11 @@ public class Shell {
       return;
     }
 
+    if (config.file != null && config.dialect != null) {
+      runToSql();
+      return;
+    }
+
     final Parser parser =
         new DefaultParser() {
           {
@@ -549,6 +614,8 @@ public class Shell {
     Config withJdbc(@Nullable String jdbc);
 
     Config withMaterialize(@Nullable String materialize);
+
+    Config withFile(@Nullable String file);
   }
 
   /** Implementation of {@link Config}. */
@@ -566,6 +633,7 @@ public class Shell {
     private final @Nullable String dialect;
     private final @Nullable String jdbc;
     private final @Nullable String materialize;
+    private final @Nullable String file;
 
     static final ConfigImpl DEFAULT =
         new ConfigImpl(
@@ -578,6 +646,7 @@ public class Shell {
             new File(""),
             Runnables.doNothing(),
             -1,
+            null,
             null,
             null,
             null,
@@ -596,7 +665,8 @@ public class Shell {
         @Nullable String eval,
         @Nullable String dialect,
         @Nullable String jdbc,
-        @Nullable String materialize) {
+        @Nullable String materialize,
+        @Nullable String file) {
       this.banner = banner;
       this.dumb = dumb;
       this.system = system;
@@ -610,6 +680,7 @@ public class Shell {
       this.dialect = dialect;
       this.jdbc = jdbc;
       this.materialize = materialize;
+      this.file = file;
     }
 
     @Override
@@ -630,7 +701,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -651,7 +723,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -672,7 +745,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -693,7 +767,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -714,7 +789,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -737,7 +813,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -758,7 +835,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -779,7 +857,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -800,7 +879,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -821,7 +901,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -842,7 +923,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -863,7 +945,8 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
     }
 
     @Override
@@ -884,7 +967,30 @@ public class Shell {
           eval,
           dialect,
           jdbc,
-          materialize);
+          materialize,
+          file);
+    }
+
+    @Override
+    public ConfigImpl withFile(@Nullable String file) {
+      if (Objects.equals(this.file, file)) {
+        return this;
+      }
+      return new ConfigImpl(
+          banner,
+          dumb,
+          system,
+          echo,
+          help,
+          valueMap,
+          directory,
+          pauseFn,
+          maxUseDepth,
+          eval,
+          dialect,
+          jdbc,
+          materialize,
+          file);
     }
   }
 
