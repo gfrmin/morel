@@ -934,7 +934,13 @@ public class CalciteCompiler extends Compiler {
           final SqlAggFunction op = aggOp(aggregate.aggregate);
           final ImmutableList.Builder<RexNode> args = ImmutableList.builder();
           if (aggregate.argument != null) {
-            args.add(translate(cx, aggregate.argument));
+            if (aggregate.argument instanceof Core.Tuple) {
+              for (Core.Exp arg : ((Core.Tuple) aggregate.argument).args) {
+                args.add(translate(cx, arg));
+              }
+            } else {
+              args.add(translate(cx, aggregate.argument));
+            }
           }
           aggregateCalls.add(
               cx.relBuilder.aggregateCall(op, args.build()).as(idPat.name));
@@ -988,6 +994,10 @@ public class CalciteCompiler extends Compiler {
         case Z_SUM_INT:
         case Z_SUM_REAL:
           return SqlStdOperatorTable.SUM;
+        case RELATIONAL_ARG_MAX:
+          return SqlStdOperatorTable.ARG_MAX;
+        case RELATIONAL_ARG_MIN:
+          return SqlStdOperatorTable.ARG_MIN;
         case RELATIONAL_COUNT:
           return SqlStdOperatorTable.COUNT;
         case RELATIONAL_MIN:

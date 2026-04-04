@@ -43,6 +43,8 @@ val <a id='only' href="#only-impl">only</a> : 'a list -> 'a
 val <a id='elem' href="#elem-impl">elem</a> : 'a * 'a bag -> bool, 'a * 'a list -> bool
 val <a id='notelem' href="#notelem-impl">notelem</a> : 'a * 'a bag -> bool, 'a * 'a list -> bool
 val <a id='sum' href="#sum-impl">sum</a> : int list -> int
+val <a id='argMax' href="#argMax-impl">argMax</a> : ('a * 'b) bag -> 'a
+val <a id='argMin' href="#argMin-impl">argMin</a> : ('a * 'b) bag -> 'a
 val <a id='compare' href="#compare-impl">compare</a> : 'a * 'a -> order
 </pre>
 
@@ -116,6 +118,22 @@ emps yield only (from d where d.deptno = e.deptno)`.
 `sum list` (or `list.sum ()`) returns the sum of the elements of `list`. Often used with
 `group`, for example `from e in emps group e.deptno compute sumId =
 sum of e.id`.
+
+<a id="argMax-impl"></a>
+<h3><code>argMax</code></h3>
+
+`argMax bag` returns the value from the (value, key) pair with the
+maximum key. Typically used with `group ... compute`:
+
+    from e in emps
+      group e.deptno
+        compute {name = argMax over (e.ename, e.sal)}
+
+<a id="argMin-impl"></a>
+<h3><code>argMin</code></h3>
+
+`argMin bag` returns the value from the (value, key) pair with the
+minimum key.
 
 <a id="compare-impl"></a>
 <h3><code>compare</code></h3>

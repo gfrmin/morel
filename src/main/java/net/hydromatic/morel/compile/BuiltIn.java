@@ -3192,6 +3192,48 @@ public enum BuiltIn {
       ts -> ts.fnType(ts.tupleType(REAL, REAL), BOOL)),
 
   /**
+   * Function "Relational.argMax", aka "argMax", of type "(&alpha; * &beta;) bag
+   * &rarr; &alpha;".
+   *
+   * <p>Returns the value associated with the maximum key:
+   *
+   * <pre>{@code
+   * from e in emps
+   *   group e.deptno
+   *     compute name = argMax over (e.ename, e.sal)
+   * }</pre>
+   */
+  RELATIONAL_ARG_MAX(
+      "Relational",
+      "argMax",
+      "argMax",
+      false,
+      ts ->
+          ts.forallType(
+              2,
+              h ->
+                  ts.fnType(
+                      ts.bagType(ts.tupleType(h.get(0), h.get(1))), h.get(0)))),
+
+  /**
+   * Function "Relational.argMin", aka "argMin", of type "(&alpha; * &beta;) bag
+   * &rarr; &alpha;".
+   *
+   * <p>Returns the value associated with the minimum key.
+   */
+  RELATIONAL_ARG_MIN(
+      "Relational",
+      "argMin",
+      "argMin",
+      false,
+      ts ->
+          ts.forallType(
+              2,
+              h ->
+                  ts.fnType(
+                      ts.bagType(ts.tupleType(h.get(0), h.get(1))), h.get(0)))),
+
+  /**
    * Function "Relational.compare", of type "&alpha; * &alpha; &rarr; order".
    *
    * <p>Returns the result of comparing the two values. Comparison is defined

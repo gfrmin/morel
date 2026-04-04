@@ -4348,6 +4348,34 @@ extend Standard ML with relational-algebra capabilities.
 
 [[functions]]
 structure = "Relational"
+name = "argMax, argMax"
+specified = "morel"
+type = "(α * β) bag → α"
+prototype = "argMax bag"
+description = """
+returns the value from the (value, key) pair with the
+maximum key. Typically used with `group ... compute`:
+
+    from e in emps
+      group e.deptno
+        compute {name = argMax over (e.ename, e.sal)}
+"""
+ordinal = 273
+
+[[functions]]
+structure = "Relational"
+name = "argMin, argMin"
+specified = "morel"
+type = "(α * β) bag → α"
+prototype = "argMin bag"
+description = """
+returns the value from the (value, key) pair with the
+minimum key.
+"""
+ordinal = 274
+
+[[functions]]
+structure = "Relational"
 name = "compare"
 specified = "morel"
 type = "α * α → order"

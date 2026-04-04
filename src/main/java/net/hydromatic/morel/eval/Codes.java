@@ -3410,6 +3410,46 @@ public abstract class Codes {
         }
       };
 
+  /** @see BuiltIn#RELATIONAL_ARG_MAX */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private static final Applicable RELATIONAL_ARG_MAX =
+      new BaseApplicable1<Object, List>(BuiltIn.RELATIONAL_ARG_MAX) {
+        @Override
+        public Object apply(List list) {
+          Object bestVal = null;
+          Comparable bestKey = null;
+          for (Object item : list) {
+            final List tuple = (List) item;
+            final Comparable key = (Comparable) tuple.get(1);
+            if (bestKey == null || key.compareTo(bestKey) > 0) {
+              bestKey = key;
+              bestVal = tuple.get(0);
+            }
+          }
+          return bestVal;
+        }
+      };
+
+  /** @see BuiltIn#RELATIONAL_ARG_MIN */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private static final Applicable RELATIONAL_ARG_MIN =
+      new BaseApplicable1<Object, List>(BuiltIn.RELATIONAL_ARG_MIN) {
+        @Override
+        public Object apply(List list) {
+          Object bestVal = null;
+          Comparable bestKey = null;
+          for (Object item : list) {
+            final List tuple = (List) item;
+            final Comparable key = (Comparable) tuple.get(1);
+            if (bestKey == null || key.compareTo(bestKey) < 0) {
+              bestKey = key;
+              bestVal = tuple.get(0);
+            }
+          }
+          return bestVal;
+        }
+      };
+
   /** @see BuiltIn#RELATIONAL_COMPARE */
   private static final Applicable RELATIONAL_COMPARE = Comparer.INITIAL;
 
@@ -5394,6 +5434,8 @@ public abstract class Codes {
           .put(BuiltIn.RANGE_DISCRETE_SET_RANGES, RANGE_DISCRETE_SET_RANGES)
           .put(BuiltIn.RANGE_DISCRETE_SET_TO_BAG, RANGE_DISCRETE_SET_TO_BAG)
           .put(BuiltIn.RANGE_DISCRETE_SET_TO_LIST, RANGE_DISCRETE_SET_TO_LIST)
+          .put(BuiltIn.RELATIONAL_ARG_MAX, RELATIONAL_ARG_MAX)
+          .put(BuiltIn.RELATIONAL_ARG_MIN, RELATIONAL_ARG_MIN)
           .put(BuiltIn.RELATIONAL_COMPARE, RELATIONAL_COMPARE)
           .put(BuiltIn.RELATIONAL_COUNT, RELATIONAL_COUNT)
           .put(BuiltIn.RELATIONAL_EMPTY, RELATIONAL_EMPTY)
