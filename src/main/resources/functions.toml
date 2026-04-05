@@ -4474,6 +4474,20 @@ max of e.id`.
 """
 
 [[functions]]
+ordinal = 275
+structure = "Relational"
+name = "maxBy, maxBy"
+specified = "morel"
+type = "(α → β) → α list → α"
+prototype = "maxBy f list"
+description = """
+returns the element of the list that maximizes the key
+extracted by `f`. Used for whole-row deduplication:
+`from h in horses group h.horse_id compute {latest =
+(maxBy #file_modified_at) over h}`.
+"""
+
+[[functions]]
 ordinal = 191
 structure = "Relational"
 name = "min, min"
@@ -4485,6 +4499,18 @@ description = """
 returns the least element of `list`. Often used with
 `group`, for example `from e in emps group e.deptno compute minId =
 min of e.id`.
+"""
+
+[[functions]]
+ordinal = 276
+structure = "Relational"
+name = "minBy, minBy"
+specified = "morel"
+type = "(α → β) → α list → α"
+prototype = "minBy f list"
+description = """
+returns the element of the list that minimizes the key
+extracted by `f`.
 """
 
 [[functions]]

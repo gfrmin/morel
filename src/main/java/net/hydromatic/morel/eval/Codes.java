@@ -3513,12 +3513,62 @@ public abstract class Codes {
         }
       };
 
+  /** @see BuiltIn#RELATIONAL_MAX_BY */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private static final Applicable RELATIONAL_MAX_BY =
+      new ApplicableImpl(BuiltIn.RELATIONAL_MAX_BY) {
+        @Override
+        public Object apply(Stack stack, Object keyFn) {
+          return new BaseApplicable1<Object, List>(BuiltIn.RELATIONAL_MAX_BY) {
+            @Override
+            public Object apply(List bag) {
+              Object best = null;
+              Comparable bestKey = null;
+              for (Object item : bag) {
+                final Comparable key =
+                    (Comparable) ((Applicable) keyFn).apply(stack, item);
+                if (bestKey == null || key.compareTo(bestKey) > 0) {
+                  bestKey = key;
+                  best = item;
+                }
+              }
+              return best;
+            }
+          };
+        }
+      };
+
   /** @see BuiltIn#RELATIONAL_MIN */
   private static final Applicable RELATIONAL_MIN =
       new BaseApplicable1<Object, List>(BuiltIn.RELATIONAL_MIN) {
         @Override
         public Object apply(List list) {
           return Ordering.natural().min(list);
+        }
+      };
+
+  /** @see BuiltIn#RELATIONAL_MIN_BY */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private static final Applicable RELATIONAL_MIN_BY =
+      new ApplicableImpl(BuiltIn.RELATIONAL_MIN_BY) {
+        @Override
+        public Object apply(Stack stack, Object keyFn) {
+          return new BaseApplicable1<Object, List>(BuiltIn.RELATIONAL_MIN_BY) {
+            @Override
+            public Object apply(List bag) {
+              Object best = null;
+              Comparable bestKey = null;
+              for (Object item : bag) {
+                final Comparable key =
+                    (Comparable) ((Applicable) keyFn).apply(stack, item);
+                if (bestKey == null || key.compareTo(bestKey) < 0) {
+                  bestKey = key;
+                  best = item;
+                }
+              }
+              return best;
+            }
+          };
         }
       };
 
@@ -5441,7 +5491,9 @@ public abstract class Codes {
           .put(BuiltIn.RELATIONAL_EMPTY, RELATIONAL_EMPTY)
           .put(BuiltIn.RELATIONAL_ITERATE, RELATIONAL_ITERATE)
           .put(BuiltIn.RELATIONAL_MAX, RELATIONAL_MAX)
+          .put(BuiltIn.RELATIONAL_MAX_BY, RELATIONAL_MAX_BY)
           .put(BuiltIn.RELATIONAL_MIN, RELATIONAL_MIN)
+          .put(BuiltIn.RELATIONAL_MIN_BY, RELATIONAL_MIN_BY)
           .put(BuiltIn.RELATIONAL_NON_EMPTY, RELATIONAL_NON_EMPTY)
           .put(BuiltIn.RELATIONAL_ONLY, RELATIONAL_ONLY)
           .put(BuiltIn.RELATIONAL_SUM, RELATIONAL_SUM)

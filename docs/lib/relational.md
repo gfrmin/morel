@@ -45,6 +45,8 @@ val <a id='notelem' href="#notelem-impl">notelem</a> : 'a * 'a bag -> bool, 'a *
 val <a id='sum' href="#sum-impl">sum</a> : int list -> int
 val <a id='argMax' href="#argMax-impl">argMax</a> : ('a * 'b) bag -> 'a
 val <a id='argMin' href="#argMin-impl">argMin</a> : ('a * 'b) bag -> 'a
+val <a id='maxBy' href="#maxBy-impl">maxBy</a> : ('a -> 'b) -> 'a list -> 'a
+val <a id='minBy' href="#minBy-impl">minBy</a> : ('a -> 'b) -> 'a list -> 'a
 val <a id='compare' href="#compare-impl">compare</a> : 'a * 'a -> order
 </pre>
 
@@ -134,6 +136,20 @@ maximum key. Typically used with `group ... compute`:
 
 `argMin bag` returns the value from the (value, key) pair with the
 minimum key.
+
+<a id="maxBy-impl"></a>
+<h3><code>maxBy</code></h3>
+
+`maxBy f list` returns the element of the list that maximizes the key
+extracted by `f`. Used for whole-row deduplication:
+`from h in horses group h.horse_id compute {latest =
+(maxBy #file_modified_at) over h}`.
+
+<a id="minBy-impl"></a>
+<h3><code>minBy</code></h3>
+
+`minBy f list` returns the element of the list that minimizes the key
+extracted by `f`.
 
 <a id="compare-impl"></a>
 <h3><code>compare</code></h3>
