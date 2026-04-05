@@ -287,9 +287,12 @@ public class Shell {
     Prop.HYBRID.set(propMap, true);
     final Session session = new Session(propMap, typeSystem);
     final Calcite calcite;
-    if (config.jdbc != null) {
+    if (config.jdbc != null && config.jdbc.startsWith("jdbc:")) {
       final String schema = extractSchema(config.jdbc);
       calcite = Calcite.withJdbc(config.jdbc, schema);
+    } else if (config.jdbc != null) {
+      // --jdbc=<schema> uses env vars for connection
+      calcite = Calcite.withJdbcFromEnv(config.jdbc);
     } else {
       calcite = Calcite.withDataSets(ImmutableMap.of());
     }
@@ -398,7 +401,15 @@ public class Shell {
    * ClickHouse via JDBC.
    */
   private void runJdbc() {
-    final String schema = extractSchema(config.jdbc);
+    final String schema;
+    final Calcite calcite;
+    if (config.jdbc.startsWith("jdbc:")) {
+      schema = extractSchema(config.jdbc);
+      calcite = Calcite.withJdbc(config.jdbc, schema);
+    } else {
+      schema = config.jdbc;
+      calcite = Calcite.withJdbcFromEnv(schema);
+    }
     final SqlDialect dialect = inferDialect(config.jdbc);
     final TypeSystem typeSystem = new TypeSystem();
     final Map<Prop, Object> propMap = new LinkedHashMap<>();
@@ -406,7 +417,6 @@ public class Shell {
     Prop.SCRIPT_DIRECTORY.set(propMap, config.directory);
     Prop.HYBRID.set(propMap, true);
     final Session session = new Session(propMap, typeSystem);
-    final Calcite calcite = Calcite.withJdbc(config.jdbc, schema);
     final Map<String, ForeignValue> allForeign =
         new LinkedHashMap<>(config.valueMap);
     allForeign.putAll(calcite.foreignValues());

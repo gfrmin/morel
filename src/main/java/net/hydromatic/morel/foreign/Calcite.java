@@ -110,6 +110,19 @@ public class Calcite {
     return new JdbcCalcite(url, schema);
   }
 
+  /**
+   * Creates a runtime context backed by a JDBC connection using environment
+   * variables (or {@code .env} file) for connection settings: {@code
+   * CLICKHOUSE_HOST}, {@code CLICKHOUSE_PORT}, {@code CLICKHOUSE_USER}, {@code
+   * CLICKHOUSE_PASSWORD}.
+   */
+  public static Calcite withJdbcFromEnv(String schema) {
+    final String host = envOrDefault("CLICKHOUSE_HOST", "localhost");
+    final String port = envOrDefault("CLICKHOUSE_PORT", "8123");
+    final String url = "jdbc:clickhouse://" + host + ":" + port + "/" + schema;
+    return new JdbcCalcite(url, schema);
+  }
+
   /** Creates an empty RelBuilder. */
   public RelBuilder relBuilder() {
     return relBuilder.transform(c -> c);
@@ -346,7 +359,9 @@ public class Calcite {
     final DataSource ds;
 
     JdbcCalcite(String url, String schema) {
-      this.ds = JdbcSchema.dataSource(url, null, "default", "");
+      final String user = envOrDefault("CLICKHOUSE_USER", "default");
+      final String password = envOrDefault("CLICKHOUSE_PASSWORD", "");
+      this.ds = JdbcSchema.dataSource(url, null, user, password);
       final JdbcSchema jdbcSchema =
           JdbcSchema.create(rootSchema, "db", ds, null, schema);
       rootSchema.add("db", jdbcSchema);
@@ -459,6 +474,12 @@ public class Calcite {
       return ((CalciteCode) unwrapped).rel;
     }
     return null;
+  }
+
+  /** Returns the value of an environment variable, or a default. */
+  private static String envOrDefault(String name, String defaultValue) {
+    final String value = System.getenv(name);
+    return value != null ? value : defaultValue;
   }
 
   /**
