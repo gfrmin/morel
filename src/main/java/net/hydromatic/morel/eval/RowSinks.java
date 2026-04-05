@@ -180,6 +180,14 @@ public abstract class RowSinks {
   }
 
   /**
+   * Creates a {@link RowSink} that flatMaps: evaluates a collection-valued
+   * expression and feeds each element to the next sink.
+   */
+  public static RowSink yieldMany(Code code, @Nullable RowSink nextSink) {
+    return new YieldManyRowSink(code, nextSink);
+  }
+
+  /**
    * Creates a {@link RowSink} to collect the results of a {@code from}
    * expression.
    */
@@ -1190,6 +1198,69 @@ public abstract class RowSinks {
     public void start(Stack stack) {
       startActions.forEach(Runnable::run);
       rowSink.start(stack);
+    }
+  }
+  /**
+   * Row sink that flatMaps: for each input row, evaluates a collection-valued
+   * expression and feeds each element to the next sink (or collects if last
+   * step).
+   */
+  private static class YieldManyRowSink implements RowSink {
+    private final Code code;
+    private final @Nullable RowSink nextSink;
+    private final List<Object> list = new ArrayList<>();
+
+    YieldManyRowSink(Code code, @Nullable RowSink nextSink) {
+      this.code = requireNonNull(code);
+      this.nextSink = nextSink;
+    }
+
+    @Override
+    public Describer describe(Describer describer) {
+      return describer.start(
+          "yieldmany",
+          d -> {
+            d.arg("code", code);
+            if (nextSink != null) {
+              d.arg("sink", nextSink);
+            }
+          });
+    }
+
+    @Override
+    public int maxSlots() {
+      return code.maxSlots();
+    }
+
+    @Override
+    public void start(Stack stack) {
+      list.clear();
+      if (nextSink != null) {
+        nextSink.start(stack);
+      }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public void accept(Stack stack) {
+      final Object result = code.eval(stack);
+      if (result instanceof List) {
+        if (nextSink != null) {
+          for (Object item : (List<Object>) result) {
+            nextSink.accept(stack);
+          }
+        } else {
+          list.addAll((List<Object>) result);
+        }
+      }
+    }
+
+    @Override
+    public List<Object> result(Stack stack) {
+      if (nextSink != null) {
+        return nextSink.result(stack);
+      }
+      return ImmutableList.copyOf(list);
     }
   }
 }

@@ -1410,6 +1410,12 @@ public class Resolver {
     }
 
     @Override
+    protected void visit(Ast.YieldMany yieldMany) {
+      final Resolver r = withStepEnv(fromBuilder.stepEnv());
+      fromBuilder.yieldMany(r.toCore(yieldMany.exp));
+    }
+
+    @Override
     protected void visit(Ast.Through through) {
       // Translate "from ... through p in f"
       // as if they wrote "from p in f (from ...)"

@@ -43,6 +43,8 @@ import net.hydromatic.morel.compile.RefChecker;
 import net.hydromatic.morel.type.Binding;
 import net.hydromatic.morel.type.ListType;
 import net.hydromatic.morel.type.PrimitiveType;
+import net.hydromatic.morel.type.RecordLikeType;
+import net.hydromatic.morel.type.Type;
 import net.hydromatic.morel.type.TypeSystem;
 import net.hydromatic.morel.util.Pair;
 import net.hydromatic.morel.util.PairList;
@@ -377,6 +379,32 @@ public class FromBuilder {
     return yield_(false, exp, atom);
   }
 
+  public FromBuilder yieldMany(Core.Exp exp) {
+    // yieldmany flattens: element type of exp becomes
+    // the new output row type.
+    final Core.StepEnv currentEnv = stepEnv();
+    final Type elementType = exp.type.elementType();
+    final boolean atom = elementType.op() != Op.RECORD_TYPE;
+    // Create bindings from the element type
+    final ImmutableList.Builder<Binding> newBindings = ImmutableList.builder();
+    if (elementType.op() == Op.RECORD_TYPE
+        || elementType.op() == Op.TUPLE_TYPE) {
+      ((RecordLikeType) elementType)
+          .argNameTypes()
+          .forEach(
+              (name, type) ->
+                  newBindings.add(Binding.of(core.idPat(type, name, 0))));
+    } else {
+      // Scalar element: single binding
+      newBindings.add(Binding.of(core.idPat(elementType, "it", 0)));
+    }
+    final Core.StepEnv env =
+        Core.StepEnv.of(newBindings.build(), atom, currentEnv.ordered);
+    bindings.clear();
+    bindings.addAll(env.bindings);
+    return addStep(core.yieldMany(env, exp));
+  }
+
   public FromBuilder yield_(boolean uselessIfLast, Core.Exp exp, boolean atom) {
     return yield_(uselessIfLast, null, exp, atom);
   }
@@ -576,6 +604,11 @@ public class FromBuilder {
     @Override
     protected void visit(Core.Yield yield) {
       yield_(false, yield.env, yield.exp, yield.env.atom);
+    }
+
+    @Override
+    protected void visit(Core.YieldMany yieldMany) {
+      yieldMany(yieldMany.exp);
     }
   }
 

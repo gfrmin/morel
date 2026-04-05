@@ -165,6 +165,7 @@ public enum Op {
   INTERSECT(" intersect "),
   UNION(" union "),
   YIELD,
+  YIELD_MANY,
   INTO,
   THROUGH,
   AGGREGATE,

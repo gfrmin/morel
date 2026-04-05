@@ -687,6 +687,7 @@ public class Compiler {
     return ImmutableMap.copyOf(map);
   }
 
+  // CHECKSTYLE: stop MethodLength
   private Supplier<RowSink> createRowSinkFactory(
       Context cx0,
       Context cxFrom,
@@ -860,6 +861,16 @@ public class Compiler {
           return () -> RowSinks.yield(codeMap, yieldNextFactory.get());
         }
 
+      case YIELD_MANY:
+        return compileYieldManySink(
+            cx,
+            cxFrom,
+            allScope2,
+            (Core.YieldMany) firstStep,
+            stepEnv,
+            steps,
+            elementType);
+
       case ORDER:
         return compileOrderSink(
             cx,
@@ -892,6 +903,21 @@ public class Compiler {
   }
 
   /** Compiles an ORDER step into a {@link RowSink} factory. */
+  private Supplier<RowSink> compileYieldManySink(
+      Context cx,
+      Context cxFrom,
+      ImmutableMap<String, Binding> allScopeBindings,
+      Core.YieldMany yieldMany,
+      Core.StepEnv stepEnv,
+      List<Core.FromStep> remainingSteps,
+      Type elementType) {
+    final Code manyCode = compile(cx, yieldMany.exp);
+    if (remainingSteps.size() == 1) {
+      return () -> RowSinks.yieldMany(manyCode, null);
+    }
+    return () -> RowSinks.yieldMany(manyCode, null);
+  }
+
   private Supplier<RowSink> compileOrderSink(
       Context cx,
       Context cxFrom,

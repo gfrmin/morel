@@ -696,6 +696,10 @@ public enum CoreBuilder {
     return new Core.Yield(env, exp);
   }
 
+  public Core.YieldMany yieldMany(Core.StepEnv env, Core.Exp exp) {
+    return new Core.YieldMany(env, exp);
+  }
+
   /** Derives bindings, then calls {@link #yield_(Core.StepEnv, Core.Exp)}. */
   public Core.Yield yield_(
       TypeSystem typeSystem, Core.Exp exp, boolean atom, boolean ordered) {

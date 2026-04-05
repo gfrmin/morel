@@ -2199,6 +2199,41 @@ public class Core {
     }
   }
 
+  /**
+   * A {@code yieldmany} step that flatMaps: evaluates a collection-valued
+   * expression for each row and emits each element.
+   */
+  public static class YieldMany extends FromStep {
+    public final Exp exp;
+
+    YieldMany(Core.StepEnv env, Exp exp) {
+      super(Op.YIELD_MANY, env);
+      this.exp = exp;
+    }
+
+    @Override
+    protected AstWriter unparseStep(
+        AstWriter w, int ordinal, int left, int right) {
+      return w.append(" yieldmany ").append(exp, 0, 0);
+    }
+
+    @Override
+    public YieldMany accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    public YieldMany copy(Core.StepEnv env, Exp exp) {
+      return env.equals(this.env) && exp == this.exp
+          ? this
+          : core.yieldMany(env, exp);
+    }
+  }
+
   /** Application of a function to its argument. */
   public static class Apply extends Exp {
     public final Exp fn;

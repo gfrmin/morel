@@ -2785,6 +2785,35 @@ public class Ast {
     }
   }
 
+  /** A {@code yieldmany} step in a {@code from} expression. */
+  public static class YieldMany extends FromStep {
+    public final Exp exp;
+
+    YieldMany(Pos pos, Exp exp) {
+      super(pos, Op.YIELD_MANY);
+      this.exp = exp;
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      return w.append(" yieldmany ").append(exp, 0, 0);
+    }
+
+    @Override
+    public AstNode accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    public YieldMany copy(Exp exp) {
+      return this.exp.equals(exp) ? this : new YieldMany(pos, exp);
+    }
+  }
+
   /** An {@code into} step in a {@code from} expression. */
   public static class Into extends FromStep {
     public final Exp exp;
