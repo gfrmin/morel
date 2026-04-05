@@ -699,12 +699,17 @@ public class CalciteCompiler extends Compiler {
         final Core.Tuple tuple = (Core.Tuple) exp;
         builder = cx.relBuilder.getTypeFactory().builder();
         operands = new ArrayList<>();
+        final List<String> fieldNames = tuple.type().argNames();
         forEachIndexed(
             tuple.args,
             (arg, i) -> {
               final RexNode e = translate(cx, arg);
               operands.add(e);
-              builder.add(Integer.toString(i), e.getType());
+              final String name =
+                  fieldNames != null && i < fieldNames.size()
+                      ? fieldNames.get(i)
+                      : Integer.toString(i);
+              builder.add(name, e.getType());
             });
         return cx.relBuilder
             .getRexBuilder()
