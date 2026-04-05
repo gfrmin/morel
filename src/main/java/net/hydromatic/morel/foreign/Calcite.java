@@ -55,6 +55,7 @@ import org.apache.calcite.rel.type.DelegatingTypeSystem;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.sql.SqlDialect;
+import org.apache.calcite.sql.dialect.ClickHouseSqlDialect;
 import org.apache.calcite.sql2rel.RelDecorrelator;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Program;
@@ -151,11 +152,17 @@ public class Calcite {
         program.run(
             planner, rel, traitSet, ImmutableList.of(), ImmutableList.of());
     final RelToSqlConverter converter = new RelToSqlConverter(dialect);
-    return converter
-        .visitRoot(rel2)
-        .asQueryOrValues()
-        .toSqlString(dialect)
-        .getSql();
+    String sql =
+        converter
+            .visitRoot(rel2)
+            .asQueryOrValues()
+            .toSqlString(dialect)
+            .getSql();
+    // ClickHouse requires lowercase for argMax/argMin
+    if (dialect instanceof ClickHouseSqlDialect) {
+      sql = sql.replace("ARG_MAX(", "argMax(").replace("ARG_MIN(", "argMin(");
+    }
+    return sql;
   }
 
   /**
