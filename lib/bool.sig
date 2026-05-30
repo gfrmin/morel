@@ -18,16 +18,24 @@
  *
  * The BOOL signature, per the Standard ML Basis Library.
  *)
+(** The `Bool` structure provides the boolean type and associated operations. *)
 signature BOOL =
 sig
+
+  (** is the type of boolean values `true` and `false`. *)
   datatype bool = `false` | `true`
-  val not : bool -> bool
-  val toString : bool -> string
-(*
-  val scan       : (char, 'a) StringCvt.reader
-                     -> (bool, 'a) StringCvt.reader
-*)
-  val fromString : string -> bool option
+  (** returns the logical inverse of `b`. *)
+  val not : bool -> bool [@@method] [@@prototype "not b"] [@@syntax "prefix"]
+  (**
+   * returns the string representation of `b`, either "true" or "false".
+   *)
+  val toString : bool -> string [@@method] [@@prototype "toString b"]
+  (**
+   * scans a `bool` value from the string `s`. Returns `SOME (true)` if
+   * `s` is "true", `SOME (false)` if `s` is "false", and `NONE` otherwise.
+   *)
+  val fromString : string -> bool option [@@prototype "fromString s"]
 end
+[@@description "Boolean values and operations."]
 
 (*) End bool.sig

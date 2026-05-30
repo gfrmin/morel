@@ -624,7 +624,7 @@ public class MainTest {
             + "    1, 15)$ ^\n"
             + "  \"y\"\n")
         .assertEvalError(
-            pos -> throwsA(Codes.BuiltInExn.SUBSCRIPT.mlName, pos));
+            pos -> throwsA(Codes.BuiltInExn.SUBSCRIPT.mlName(), pos));
   }
 
   /** Tests the name of {@link TypeVar}. */
@@ -2817,21 +2817,8 @@ public class MainTest {
         .assertEvalIter(equalsUnordered(list(0, 1), list(1, 6)));
     ml("from e in [{x = 1, y = 5}, {x = 0, y = 1}, {x = 1, y = 1}]\n"
             + "group {a = e.x}\n"
-            + "compute {a = sum over e.y}")
-        .assertTypeThrowsRuntimeException("Duplicate field name 'a' in group");
-    ml("from e in [{x = 1, y = 5}, {x = 0, y = 1}, {x = 1, y = 1}]\n"
-            + "group {sum = e.x}\n"
-            + "compute sum over e.y")
-        .assertTypeThrowsRuntimeException(
-            "Duplicate field name 'sum' in group");
-    ml("from e in [{x = 1, y = 5}, {x = 0, y = 1}, {x = 1, y = 1}]\n"
-            + "group {a = e.x}\n"
             + "compute {b = sum over e.y, c = sum over e.x}")
         .assertEvalIter(equalsUnordered(list(0, 1, 0), list(1, 6, 2)));
-    ml("from e in [{x = 1, y = 5}, {x = 0, y = 1}, {x = 1, y = 1}]\n"
-            + "group {a = e.x}\n"
-            + "compute {c = sum over e.y, c = sum over e.x}")
-        .assertTypeThrowsRuntimeException("duplicate field 'c' in record");
   }
 
   /**

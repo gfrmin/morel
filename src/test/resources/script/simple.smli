@@ -31,6 +31,22 @@ Sys.set ("lineWidth", 78);
 > val it = ~2147483648 : int
 2147483647;
 > val it = 2147483647 : int
+1.0;
+> val it = 1 : real
+0.0;
+> val it = 0 : real
+~0.0;
+> val it = ~0 : real
+~2.0;
+> val it = ~2 : real
+1.5;
+> val it = 1.5 : real
+1.0e10;
+> val it = 1E10 : real
+1.5e9;
+> val it = 1.5E9 : real
+(Real.posInf / Real.posInf, Real.posInf, Real.negInf, 0.0, ~0.0);
+> val it = (nan,inf,~inf,0,~0) : real * real * real * real * real
 "a string";
 > val it = "a string" : string
 "a \"quoted\" string\\with backslash";
@@ -617,7 +633,7 @@ fun distance (x, y) (x', y') =
   Math.sqrt ((x - x') * (x - x') + (y - y') * (y - y'));
 > val distance = fn : real * real -> real * real -> real
 distance (0.0, 1.0) (4.0, 4.0);
-> val it = 5.0 : real
+> val it = 5 : real
 
 (*) Composite declarations
 let
@@ -626,20 +642,30 @@ in
   x + y
 end;
 > val it = 3 : int
+(*) Set 'it' to a value of a distinct type before the next tests, so
+(*) that the assertions that follow show whether the val declarations
+(*) leave 'it' alone.
+"composite";
+> val it = "composite" : string
 val (x, y) = (1, 2);
 > val x = 1 : int
 > val y = 2 : int
+(*) Composite val declarations do not assign 'it'.
 it;
-> val it = (1,2) : int * int
+> val it = "composite" : string
 val (x, 2) = (1, 2);
 > val x = 1 : int
 it;
-> val it = (1,2) : int * int
+> val it = "composite" : string
 val h :: t = [1, 2, 3];
 > val h = 1 : int
 > val t = [2,3] : int list
 it;
-> val it = [1,2,3] : int list
+> val it = "composite" : string
+(*) Empty (unit) value declarations do not assign 'it'.
+val () = ();
+it;
+> val it = "composite" : string
 val _ = 3;
 
 val SOME i = SOME 1;
@@ -680,7 +706,7 @@ Sys.unset "matchCoverageEnabled";
  * Robert Harper. *)
 
 val x = (( "foo", true ), 17 );
-> val x = (("foo",true),17) : string * bool * int
+> val x = (("foo",true),17) : (string * bool) * int
 val ( l as (ll,lr), r ) = x;
 > val l = ("foo",true) : string * bool
 > val ll = "foo" : string
@@ -773,7 +799,7 @@ t.3;
 
 (*) Nested tuple access
 val nested = ((1, 2), (3, 4));
-> val nested = ((1,2),(3,4)) : int * int * (int * int)
+> val nested = ((1,2),(3,4)) : (int * int) * (int * int)
 nested.1;
 > val it = (1,2) : int * int
 (*) Chained numeric field access requires parentheses because '1.1' is a real literal
@@ -796,7 +822,7 @@ mixed.pair.2;
 
 (*) Chained mixed access: tuple field, record field, tuple field
 val t2 = (({x = (100, 200)}, "a"), "b");
-> val t2 = (({x=(100,200)},"a"),"b") : {x:int * int} * string * string
+> val t2 = (({x=(100,200)},"a"),"b") : ({x:int * int} * string) * string
 (*) Chained numeric field access requires parentheses
 ((t2.1).1).x.2;
 > val it = 200 : int
@@ -808,7 +834,7 @@ val t2 = (({x = (100, 200)}, "a"), "b");
 
 (*) 3.2e1 is scientific notation (32.0)
 3.2e1;
-> val it = 32.0 : real
+> val it = 32 : real
 
 (*) To access field of literal tuple, use parentheses
 (3, "three").1;

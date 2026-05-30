@@ -587,6 +587,185 @@ public class Ast {
     }
   }
 
+  /**
+   * Kind of attribute syntax used.
+   *
+   * <ul>
+   *   <li>{@link #EXP} - {@code [@a]} - attaches to an expression or type.
+   *   <li>{@link #DECL} - {@code [@@a]} - attaches to a declaration.
+   *   <li>{@link #FLOATING} - {@code [@@@a]} - attaches to the enclosing
+   *       structure or file.
+   * </ul>
+   */
+  public enum AttributeKind {
+    EXP,
+    DECL,
+    FLOATING
+  }
+
+  /**
+   * Single attribute, e.g. {@code [@a]}, {@code [@@deprecated "msg"]}, or
+   * {@code [@a: int]}. At most one of {@link #payload} and {@link #typePayload}
+   * is non-null.
+   */
+  public static class Attribute extends AstNode {
+    public final AttributeKind kind;
+    public final String name;
+    public final @Nullable Exp payload;
+    public final @Nullable Type typePayload;
+
+    Attribute(
+        Pos pos,
+        AttributeKind kind,
+        String name,
+        @Nullable Exp payload,
+        @Nullable Type typePayload) {
+      super(pos, Op.ATTRIBUTE);
+      this.kind = requireNonNull(kind);
+      this.name = requireNonNull(name);
+      this.payload = payload;
+      this.typePayload = typePayload;
+      checkArgument(
+          payload == null || typePayload == null,
+          "an attribute carries at most one payload");
+    }
+
+    @Override
+    public int hashCode() {
+      return hash(kind, name, payload, typePayload);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return this == obj
+          || obj instanceof Attribute
+              && kind == ((Attribute) obj).kind
+              && name.equals(((Attribute) obj).name)
+              && Objects.equals(payload, ((Attribute) obj).payload)
+              && Objects.equals(typePayload, ((Attribute) obj).typePayload);
+    }
+
+    @Override
+    public Attribute accept(Shuttle shuttle) {
+      return this;
+    }
+
+    @Override
+    public void accept(Visitor visitor) {}
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      w.append("[");
+      switch (kind) {
+        case EXP:
+          w.append("@");
+          break;
+        case DECL:
+          w.append("@@");
+          break;
+        case FLOATING:
+          w.append("@@@");
+          break;
+      }
+      w.append(name);
+      if (payload != null) {
+        w.append(" ").append(payload, 0, 0);
+      } else if (typePayload != null) {
+        w.append(": ").append(typePayload, 0, 0);
+      }
+      return w.append("]");
+    }
+  }
+
+  /** Expression with one or more attached attributes, e.g. {@code e [@a]}. */
+  public static class AttributedExp extends Exp {
+    public final Exp exp;
+    public final List<Attribute> attributes;
+
+    AttributedExp(Pos pos, Exp exp, ImmutableList<Attribute> attributes) {
+      super(pos, Op.ATTRIBUTED_EXP);
+      this.exp = requireNonNull(exp);
+      this.attributes = requireNonNull(attributes);
+    }
+
+    @Override
+    public int hashCode() {
+      return hash(exp, attributes);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return this == obj
+          || obj instanceof AttributedExp
+              && exp.equals(((AttributedExp) obj).exp)
+              && attributes.equals(((AttributedExp) obj).attributes);
+    }
+
+    @Override
+    public Exp accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      w.append(exp, left, 0);
+      for (Attribute a : attributes) {
+        w.append(" ").append(a, 0, 0);
+      }
+      return w;
+    }
+  }
+
+  /** Type with one or more attached {@code [@a]} attributes. */
+  public static class AttributedType extends Type {
+    public final Type type;
+    public final List<Attribute> attributes;
+
+    AttributedType(Pos pos, Type type, ImmutableList<Attribute> attributes) {
+      super(pos, Op.ATTRIBUTED_TYPE);
+      this.type = requireNonNull(type);
+      this.attributes = requireNonNull(attributes);
+      checkArgument(!attributes.isEmpty());
+    }
+
+    @Override
+    public int hashCode() {
+      return hash(type, attributes);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return this == obj
+          || obj instanceof AttributedType
+              && type.equals(((AttributedType) obj).type)
+              && attributes.equals(((AttributedType) obj).attributes);
+    }
+
+    @Override
+    public Type accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      w.append(type, left, 0);
+      for (Attribute a : attributes) {
+        w.append(" ").append(a, 0, 0);
+      }
+      return w;
+    }
+  }
+
   /** Parse tree for a named type (e.g. "int" or "(int, string) list"). */
   public static class NamedType extends Type {
     public final List<Type> types;
@@ -1484,6 +1663,91 @@ public class Ast {
     }
   }
 
+  /** Declaration with one or more attached {@code [@@attr]} attributes. */
+  public static class AttributedDecl extends Decl {
+    public final Decl decl;
+    public final List<Attribute> attributes;
+
+    AttributedDecl(Pos pos, Decl decl, ImmutableList<Attribute> attributes) {
+      super(pos, Op.ATTRIBUTED_DECL);
+      this.decl = requireNonNull(decl);
+      this.attributes = requireNonNull(attributes);
+      checkArgument(!attributes.isEmpty());
+    }
+
+    @Override
+    public int hashCode() {
+      return hash(decl, attributes);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return this == obj
+          || obj instanceof AttributedDecl
+              && decl.equals(((AttributedDecl) obj).decl)
+              && attributes.equals(((AttributedDecl) obj).attributes);
+    }
+
+    @Override
+    public Decl accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      w.append(decl, 0, 0);
+      for (Attribute a : attributes) {
+        w.append(" ").append(a, 0, 0);
+      }
+      return w;
+    }
+  }
+
+  /**
+   * Floating attribute {@code [@@@attr]} that stands alone as a declaration
+   * (e.g. at the top of a structure or file).
+   */
+  public static class FloatingAttrDecl extends Decl {
+    public final Attribute attribute;
+
+    FloatingAttrDecl(Pos pos, Attribute attribute) {
+      super(pos, Op.FLOATING_ATTR_DECL);
+      this.attribute = requireNonNull(attribute);
+    }
+
+    @Override
+    public int hashCode() {
+      return hash(attribute);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return this == obj
+          || obj instanceof FloatingAttrDecl
+              && attribute.equals(((FloatingAttrDecl) obj).attribute);
+    }
+
+    @Override
+    public Decl accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      return w.append(attribute, 0, 0);
+    }
+  }
+
   /** Parse tree node of a signature declaration. */
   public static class SignatureDecl extends Decl {
     public final List<SignatureBind> binds;
@@ -1714,6 +1978,91 @@ public class Ast {
     }
   }
 
+  /** Specification with one or more attached {@code [@@attr]} attributes. */
+  public static class AttributedSpec extends Spec {
+    public final Spec spec;
+    public final List<Attribute> attributes;
+
+    AttributedSpec(Pos pos, Spec spec, ImmutableList<Attribute> attributes) {
+      super(pos, Op.ATTRIBUTED_SPEC);
+      this.spec = requireNonNull(spec);
+      this.attributes = requireNonNull(attributes);
+      checkArgument(!attributes.isEmpty());
+    }
+
+    @Override
+    public int hashCode() {
+      return hash(spec, attributes);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return this == obj
+          || obj instanceof AttributedSpec
+              && spec.equals(((AttributedSpec) obj).spec)
+              && attributes.equals(((AttributedSpec) obj).attributes);
+    }
+
+    @Override
+    public Spec accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      w.append(spec, 0, 0);
+      for (Attribute a : attributes) {
+        w.append(" ").append(a, 0, 0);
+      }
+      return w;
+    }
+  }
+
+  /**
+   * Floating attribute {@code [@@@attr]} that stands alone inside a {@code
+   * sig...end} body. Carries structure-level metadata.
+   */
+  public static class FloatingAttrSpec extends Spec {
+    public final Attribute attribute;
+
+    FloatingAttrSpec(Pos pos, Attribute attribute) {
+      super(pos, Op.FLOATING_ATTR_SPEC);
+      this.attribute = requireNonNull(attribute);
+    }
+
+    @Override
+    public int hashCode() {
+      return hash(attribute);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      return this == obj
+          || obj instanceof FloatingAttrSpec
+              && attribute.equals(((FloatingAttrSpec) obj).attribute);
+    }
+
+    @Override
+    public Spec accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      return w.append(attribute, 0, 0);
+    }
+  }
+
   /** Exception specification in a signature. */
   public static class ExceptionSpec extends Spec {
     public final Id name;
@@ -1892,6 +2241,126 @@ public class Ast {
 
     public ListExp copy(List<Exp> args) {
       return args.equals(this.args) ? this : ast.list(pos, args);
+    }
+  }
+
+  /**
+   * List expression that contains one or more range items, e.g. {@code [3 .. 7,
+   * 10]}. Desugared to {@code Range.flatten [...]} during type resolution.
+   */
+  public static class RangeList extends Exp {
+    public final List<RangeListItem> items;
+
+    RangeList(Pos pos, Iterable<? extends RangeListItem> items) {
+      super(pos, Op.RANGE_LIST);
+      this.items = ImmutableList.copyOf(items);
+    }
+
+    @Override
+    public void forEachArg(ObjIntConsumer<Exp> action) {
+      int i = 0;
+      for (RangeListItem item : items) {
+        if (item.lo != null) {
+          action.accept(item.lo, i++);
+        }
+        if (item.hi != null) {
+          action.accept(item.hi, i++);
+        }
+      }
+    }
+
+    public RangeList accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      w.append("[");
+      for (int i = 0; i < items.size(); i++) {
+        if (i > 0) {
+          w.append(", ");
+        }
+        items.get(i).unparse(w);
+      }
+      return w.append("]");
+    }
+  }
+
+  /**
+   * One item in a {@link RangeList}: either a point (a plain expression) or a
+   * range with one of the nine non-point {@link Kind} forms.
+   */
+  public static class RangeListItem {
+    public final Kind kind;
+    /**
+     * Lower bound; null for {@link Kind#ALL}, {@link Kind#AT_MOST}, {@link
+     * Kind#LESS_THAN}.
+     */
+    public final @Nullable Exp lo;
+    /**
+     * Upper bound; null for {@link Kind#ALL}, {@link Kind#AT_LEAST}, {@link
+     * Kind#GREATER_THAN}, {@link Kind#POINT}.
+     */
+    public final @Nullable Exp hi;
+
+    public RangeListItem(Kind kind, @Nullable Exp lo, @Nullable Exp hi) {
+      this.kind = kind;
+      this.lo = lo;
+      this.hi = hi;
+    }
+
+    void unparse(AstWriter w) {
+      switch (kind) {
+        case POINT:
+          w.append(lo, 0, 0);
+          break;
+        case CLOSED:
+          w.append(lo, 0, 0).append(" .. ").append(hi, 0, 0);
+          break;
+        case CLOSED_OPEN:
+          w.append(lo, 0, 0).append(" ..^ ").append(hi, 0, 0);
+          break;
+        case OPEN_CLOSED:
+          w.append(lo, 0, 0).append(" ^.. ").append(hi, 0, 0);
+          break;
+        case OPEN:
+          w.append(lo, 0, 0).append(" ^..^ ").append(hi, 0, 0);
+          break;
+        case AT_LEAST:
+          w.append(lo, 0, 0).append(" ..");
+          break;
+        case GREATER_THAN:
+          w.append(lo, 0, 0).append(" ^..");
+          break;
+        case AT_MOST:
+          w.append(".. ").append(hi, 0, 0);
+          break;
+        case LESS_THAN:
+          w.append("..^ ").append(hi, 0, 0);
+          break;
+        case ALL:
+          w.append("..");
+          break;
+      }
+    }
+
+    /** Kind of a {@link RangeListItem}, one per {@code Range} constructor. */
+    public enum Kind {
+      POINT,
+      CLOSED,
+      CLOSED_OPEN,
+      OPEN_CLOSED,
+      OPEN,
+      AT_LEAST,
+      GREATER_THAN,
+      AT_MOST,
+      LESS_THAN,
+      ALL
     }
   }
 
@@ -2106,6 +2575,35 @@ public class Ast {
               && this.ifFalse.equals(ifFalse)
           ? this
           : new If(pos, condition, ifTrue, ifFalse);
+    }
+  }
+
+  /** "Raise" expression. */
+  public static class Raise extends Exp {
+    public final Exp exp;
+
+    public Raise(Pos pos, Exp exp) {
+      super(pos, Op.RAISE);
+      this.exp = requireNonNull(exp);
+    }
+
+    public Exp accept(Shuttle shuttle) {
+      return shuttle.visit(this);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+      visitor.visit(this);
+    }
+
+    @Override
+    AstWriter unparse(AstWriter w, int left, int right) {
+      return w.append("raise ").append(exp, 0, right);
+    }
+
+    /** Creates a copy of this {@code Raise}, or {@code this} if unchanged. */
+    public Raise copy(Exp exp) {
+      return this.exp.equals(exp) ? this : new Raise(pos, exp);
     }
   }
 

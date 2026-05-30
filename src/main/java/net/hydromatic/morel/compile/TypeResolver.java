@@ -34,7 +34,6 @@ import static net.hydromatic.morel.util.Static.splitQuoted;
 import static net.hydromatic.morel.util.Static.transform;
 import static net.hydromatic.morel.util.Static.transformEager;
 import static org.apache.calcite.util.Util.first;
-import static org.apache.calcite.util.Util.firstDuplicate;
 
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableCollection;
@@ -81,6 +80,7 @@ import net.hydromatic.morel.type.ForallType;
 import net.hydromatic.morel.type.Keys;
 import net.hydromatic.morel.type.ListType;
 import net.hydromatic.morel.type.MultiType;
+import net.hydromatic.morel.type.ParameterizedType;
 import net.hydromatic.morel.type.PrimitiveType;
 import net.hydromatic.morel.type.RecordType;
 import net.hydromatic.morel.type.TupleType;
@@ -575,6 +575,56 @@ public class TypeResolver {
     return -1;
   }
 
+  /**
+   * Walks an AST type and checks that every type-constructor reference has the
+   * right number of arguments. Used for type aliases, where {@link
+   * TypeToTermConverter#typeTerm} is not invoked.
+   */
+  static void checkTypeConstructorArities(
+      TypeSystem typeSystem, Ast.Type type) {
+    type.accept(
+        new Visitor() {
+          @Override
+          protected void visit(Ast.NamedType namedType) {
+            checkTypeConstructorArity(
+                namedType, typeSystem.lookupOpt(namedType.name));
+            super.visit(namedType);
+          }
+        });
+  }
+
+  /**
+   * Verifies that a type-constructor application has the right number of
+   * arguments. {@code type} is the registered type for {@code namedType.name},
+   * or null if the name is not yet bound (in which case the check is skipped
+   * and unification will report the error later).
+   */
+  private static void checkTypeConstructorArity(
+      Ast.NamedType namedType, @Nullable Type type) {
+    final int expectedArity;
+    if (type instanceof ForallType) {
+      expectedArity = ((ForallType) type).parameterCount;
+    } else if (type instanceof ParameterizedType) {
+      expectedArity = ((ParameterizedType) type).parameterTypes.size();
+    } else if (type == null) {
+      return;
+    } else {
+      expectedArity = 0;
+    }
+    final int actualArity = namedType.types.size();
+    if (actualArity != expectedArity) {
+      throw new CompileException(
+          format(
+              "type constructor %s given %d argument%s, wants %d",
+              namedType.name,
+              actualArity,
+              actualArity == 1 ? "" : "s",
+              expectedArity),
+          false,
+          namedType.pos);
+    }
+  }
+
   /** Returns the collection kind for a function type. */
   private static int collectionKindOfType(Type type) {
     if (type instanceof MultiType) {
@@ -655,6 +705,8 @@ public class TypeResolver {
     final Variable v2;
     final PairList<Ast.IdPat, Term> termMap;
     switch (node.op) {
+      case ATTRIBUTED_EXP:
+        return deduceExpType(env, ((Ast.AttributedExp) node).exp, v);
       case BOOL_LITERAL:
         return reg(node, v, toTerm(PrimitiveType.BOOL));
 
@@ -707,7 +759,8 @@ public class TypeResolver {
           args2.add(deduceExpType(env, arg, vArg2));
         }
         return reg(list.copy(args2), v, listTerm(vArg2));
-
+      case RANGE_LIST:
+        return deduceRangeListType(env, (Ast.RangeList) node, v);
       case RECORD:
         return deduceRecordType(env, (Ast.Record) node, v);
 
@@ -727,21 +780,18 @@ public class TypeResolver {
 
       case RECORD_SELECTOR:
         final Ast.RecordSelector recordSelector = (Ast.RecordSelector) node;
-        throw new RuntimeException(
+        throw new TypeException(
             format(
-                "Error: unresolved flex record\n"
-                    + "   (can't tell what fields there are besides #%s)",
-                recordSelector.name));
+                "unresolved flex record (can't tell what fields there are "
+                    + "besides #%s)",
+                recordSelector.name),
+            recordSelector.pos);
 
       case IF:
-        final Ast.If if_ = (Ast.If) node;
-        v2 = unifier.variable();
-        final Ast.Exp condition2 = deduceExpType(env, if_.condition, v2);
-        equiv(v2, toTerm(PrimitiveType.BOOL));
-        final Ast.Exp ifTrue2 = deduceExpType(env, if_.ifTrue, v);
-        final Ast.Exp ifFalse2 = deduceExpType(env, if_.ifFalse, v);
-        final Ast.If if2 = if_.copy(condition2, ifTrue2, ifFalse2);
-        return reg(if2, v);
+        return deduceIfType(env, (Ast.If) node, v);
+
+      case RAISE:
+        return deduceRaiseType(env, (Ast.Raise) node, v);
 
       case CASE:
         return deduceCaseType(env, (Ast.Case) node, v);
@@ -1400,6 +1450,63 @@ public class TypeResolver {
     return args2;
   }
 
+  /**
+   * Desugars a {@link Ast.RangeList} into {@code Range.flatten [...]} where
+   * each item becomes a {@code Range} constructor application ({@code POINT e},
+   * {@code CLOSED (lo, hi)}, etc.), then type-resolves the desugared form.
+   */
+  private Ast.Exp deduceRangeListType(
+      TypeEnv env, Ast.RangeList rangeList, Variable v) {
+    final Pos pos = rangeList.pos;
+    final List<Ast.Exp> rangeExps = new ArrayList<>(rangeList.items.size());
+    for (Ast.RangeListItem item : rangeList.items) {
+      rangeExps.add(rangeItemToExp(pos, item));
+    }
+    final Ast.Exp flattenFn =
+        ast.apply(ast.recordSelector(pos, "flatten"), ast.id(pos, "Range"));
+    final Ast.Exp call = ast.apply(flattenFn, ast.list(pos, rangeExps));
+    return deduceExpType(env, call, v);
+  }
+
+  /**
+   * Converts one {@link Ast.RangeListItem} to a {@code Range} constructor
+   * application.
+   */
+  private static Ast.Exp rangeItemToExp(Pos pos, Ast.RangeListItem item) {
+    switch (item.kind) {
+      case POINT:
+        return ast.apply(ast.id(pos, "POINT"), item.lo);
+      case CLOSED:
+        return ast.apply(
+            ast.id(pos, "CLOSED"),
+            ast.tuple(pos, ImmutableList.of(item.lo, item.hi)));
+      case CLOSED_OPEN:
+        return ast.apply(
+            ast.id(pos, "CLOSED_OPEN"),
+            ast.tuple(pos, ImmutableList.of(item.lo, item.hi)));
+      case OPEN_CLOSED:
+        return ast.apply(
+            ast.id(pos, "OPEN_CLOSED"),
+            ast.tuple(pos, ImmutableList.of(item.lo, item.hi)));
+      case OPEN:
+        return ast.apply(
+            ast.id(pos, "OPEN"),
+            ast.tuple(pos, ImmutableList.of(item.lo, item.hi)));
+      case AT_LEAST:
+        return ast.apply(ast.id(pos, "AT_LEAST"), item.lo);
+      case GREATER_THAN:
+        return ast.apply(ast.id(pos, "GREATER_THAN"), item.lo);
+      case AT_MOST:
+        return ast.apply(ast.id(pos, "AT_MOST"), item.hi);
+      case LESS_THAN:
+        return ast.apply(ast.id(pos, "LESS_THAN"), item.hi);
+      case ALL:
+        return ast.id(pos, "ALL");
+      default:
+        throw new AssertionError(item.kind);
+    }
+  }
+
   /** Deduces a record constructor expression's type. */
   private Ast.Record deduceRecordType(
       TypeEnv env, Ast.Record record0, Variable v) {
@@ -1497,12 +1604,20 @@ public class TypeResolver {
       // synthetic "_group" and "_compute" labels will not appear.
       final Ast.Record groupRecord = group.key();
       final Ast.Record aggregateRecord = group.compute();
-      groupRecord.args.forEach((id, e) -> names.add(id.name));
-      aggregateRecord.args.forEach((id, e) -> names.add(id.name));
-      int duplicate = firstDuplicate(names);
-      if (duplicate >= 0) {
-        throw new RuntimeException(
-            "Duplicate field name '" + names.get(duplicate) + "' in group");
+      final Set<String> seen = new HashSet<>();
+      final List<Ast.Id> ids = new ArrayList<>();
+      groupRecord.args.forEach((id, e) -> ids.add(id));
+      aggregateRecord.args.forEach((id, e) -> ids.add(id));
+      for (Ast.Id id : ids) {
+        if (!seen.add(id.name)) {
+          // The id's position is the label if it is explicit (e.g. 'a' in
+          // 'compute {a = sum over e.y}'), or the field expression if the
+          // label is implicit (e.g. 'sum over e.y' in 'compute sum over e.y'),
+          // because AstBuilder.implicitLabel synthesizes the id with the
+          // expression's position.
+          throw new TypeException(
+              "duplicate field name '" + id.name + "' in group", id.pos);
+        }
       }
     }
   }
@@ -2386,6 +2501,24 @@ public class TypeResolver {
     return matchList2;
   }
 
+  private Ast.If deduceIfType(TypeEnv env, Ast.If if_, Variable v) {
+    final Variable v2 = unifier.variable();
+    final Ast.Exp condition2 = deduceExpType(env, if_.condition, v2);
+    equiv(v2, toTerm(PrimitiveType.BOOL));
+    final Ast.Exp ifTrue2 = deduceExpType(env, if_.ifTrue, v);
+    final Ast.Exp ifFalse2 = deduceExpType(env, if_.ifFalse, v);
+    return reg(if_.copy(condition2, ifTrue2, ifFalse2), v);
+  }
+
+  private Ast.Raise deduceRaiseType(TypeEnv env, Ast.Raise raise, Variable v) {
+    // 'raise' takes an expression of type 'exn' and returns a value of any
+    // type, since it never returns.
+    final Variable vExn = unifier.variable();
+    equiv(vExn, toTerm(typeSystem.lookup("exn"), Subst.EMPTY));
+    final Ast.Exp exp2 = deduceExpType(env, raise.exp, vExn);
+    return reg(raise.copy(exp2), v);
+  }
+
   private Ast.Case deduceCaseType(TypeEnv env, Ast.Case case_, Variable v) {
     final Variable v2 = unifier.variable();
     final Ast.Exp e2b = deduceExpType(env, case_.exp, v2);
@@ -2530,6 +2663,18 @@ public class TypeResolver {
         map.put(node, toTerm(PrimitiveType.UNIT));
         return node;
 
+      case ATTRIBUTED_DECL:
+        // Attributes are inert: type-check the inner decl, discard the
+        // wrapper. (Tooling that wants the attributes can use Sys.parseTree
+        // on the original source.)
+        return deduceDeclType(env, ((Ast.AttributedDecl) node).decl, termMap);
+
+      case FLOATING_ATTR_DECL:
+        // Floating attributes evaluate to unit; they carry no runtime
+        // semantics yet.
+        map.put(node, toTerm(PrimitiveType.UNIT));
+        return node;
+
       default:
         throw new AssertionError(
             "cannot deduce type for " + node.op + " [" + node + "]");
@@ -2540,11 +2685,17 @@ public class TypeResolver {
       TypeEnv env, Ast.TypeDecl typeDecl, PairList<Ast.IdPat, Term> termMap) {
     final List<Type.Key> keys = new ArrayList<>();
     for (Ast.TypeBind bind : typeDecl.binds) {
+      // Check that every type-constructor reference in the body has the right
+      // number of arguments before we materialize the key.
+      checkTypeConstructorArities(typeSystem, bind.type);
       final KeyBuilder keyBuilder = new KeyBuilder();
       bind.tyVars.forEach(keyBuilder::toTypeKey);
 
       keys.add(
-          Keys.alias(bind.name.name, toTypeKey(bind.type), ImmutableList.of()));
+          Keys.alias(
+              bind.name.name,
+              keyBuilder.toTypeKey(bind.type),
+              ImmutableList.of()));
     }
     final List<Type> types = typeSystem.typesFor(keys);
 
@@ -2656,12 +2807,19 @@ public class TypeResolver {
 
     /** Converts an AST type into a type key. */
     Type.Key toTypeKey(Ast.Type type) {
+      if (type instanceof Ast.CompositeType) {
+        // See note in {@link TypeToTermConverter#typeTerm}; reaching here
+        // would mean a stray composite type, which should already have been
+        // rejected.
+        throw new CompileException(
+            "type-application argument list `(t1, ..., tn)` "
+                + "must be followed by a type constructor name; "
+                + "use `t1 * ... * tn` for a tuple type",
+            false,
+            type.pos);
+      }
       switch (type.op) {
         case TUPLE_TYPE:
-          if (type instanceof Ast.CompositeType) {
-            final Ast.CompositeType compositeType = (Ast.CompositeType) type;
-            return Keys.tuple(toTypeKeys(compositeType.types));
-          }
           final Ast.TupleType tupleType = (Ast.TupleType) type;
           return Keys.tuple(toTypeKeys(tupleType.types));
 
@@ -2728,6 +2886,19 @@ public class TypeResolver {
 
     /** Converts an AST type into a type term. */
     Ast.Type typeTerm(Ast.Type type, Variable v) {
+      if (type instanceof Ast.CompositeType) {
+        // `(t1, ..., tn)` is only valid as the argument list of a parameterized
+        // type, e.g. `(int, string) either`. The parser briefly represents it
+        // as a composite type and {@link #type7} unwraps the list when an
+        // identifier follows; reaching this point means no identifier
+        // followed.
+        throw new CompileException(
+            "type-application argument list `(t1, ..., tn)` "
+                + "must be followed by a type constructor name; "
+                + "use `t1 * ... * tn` for a tuple type",
+            false,
+            type.pos);
+      }
       switch (type.op) {
         case EXPRESSION_TYPE:
           final Ast.ExpressionType expressionType = (Ast.ExpressionType) type;
@@ -2774,6 +2945,7 @@ public class TypeResolver {
         case NAMED_TYPE:
           final Ast.NamedType namedType = (Ast.NamedType) type;
           final Type aliasType = typeSystem.lookupOpt(namedType.name);
+          checkTypeConstructorArity(namedType, aliasType);
           if (aliasType instanceof AliasType) {
             final Term aliasTerm = toTerm(aliasType, Subst.EMPTY);
             return reg(type, v, aliasTerm);
@@ -3210,9 +3382,48 @@ public class TypeResolver {
 
   /** Registers an infix operator. */
   private Ast.Exp infix(TypeEnv env, Ast.InfixCall call, Variable v) {
+    // Special case: 'x elem [r1, r2, ...]' (where the RHS contains range
+    // items) is rewritten to
+    //   Range.contains r1 x orelse Range.contains r2 x orelse ...
+    // This avoids materializing the list, which may be infinite (e.g.
+    // '5 elem [0..]' or 'x elem [0.0 ..^ 1.0]').
+    if ((call.op == Op.ELEM || call.op == Op.NOT_ELEM)
+        && call.a1 instanceof Ast.RangeList) {
+      return elemOnRangeList(env, call, v);
+    }
     Ast.Id id = ast.id(Pos.ZERO, requireNonNull(call.op.opName));
     Ast.Tuple arg = ast.tuple(Pos.ZERO, ImmutableList.of(call.a0, call.a1));
     return deduceExpType(env, ast.apply(id, arg), v);
+  }
+
+  /**
+   * Desugars {@code x elem [r1, r2, ...]} (and {@code notelem}) into a chain of
+   * {@code Range.contains} calls combined with {@code orelse}.
+   */
+  private Ast.Exp elemOnRangeList(TypeEnv env, Ast.InfixCall call, Variable v) {
+    final Ast.RangeList rangeList = (Ast.RangeList) call.a1;
+    final Pos pos = call.pos;
+    final Ast.Exp x = call.a0;
+    final Ast.Exp result;
+    if (rangeList.items.isEmpty()) {
+      result = ast.boolLiteral(pos, call.op == Op.NOT_ELEM);
+    } else {
+      Ast.Exp disjunction = null;
+      for (Ast.RangeListItem item : rangeList.items) {
+        final Ast.Exp rangeExp = rangeItemToExp(pos, item);
+        final Ast.Exp containsCurried =
+            ast.apply(
+                ast.recordSelector(pos, "contains"), ast.id(pos, "Range"));
+        final Ast.Exp test = ast.apply(ast.apply(containsCurried, rangeExp), x);
+        disjunction =
+            (disjunction == null) ? test : ast.orElse(disjunction, test);
+      }
+      result =
+          (call.op == Op.NOT_ELEM)
+              ? ast.apply(ast.id(pos, "not"), disjunction)
+              : disjunction;
+    }
+    return deduceExpType(env, result, v);
   }
 
   /** Registers a prefix operator. */

@@ -404,6 +404,10 @@ public class Compiler {
         argCode = compile(cx, case_.exp);
         return Codes.apply(matchCode, argCode);
 
+      case RAISE:
+        final Core.Raise raise = (Core.Raise) expression;
+        return Codes.raise(compile(cx, raise.exp), raise.pos);
+
       case RECORD_SELECTOR:
         final Core.RecordSelector recordSelector =
             (Core.RecordSelector) expression;
@@ -1585,7 +1589,10 @@ public class Compiler {
             ImmutableList.copyOf(newBindings);
         actions.add(
             (outLines, outBindings, evalEnv) -> {
-              String line = dataType.describe(new StringBuilder()).toString();
+              final int lineWidth =
+                  Prop.LINE_WIDTH.intValue(evalEnv.getSession().map);
+              String line =
+                  dataType.describe(new StringBuilder(), lineWidth).toString();
               outLines.accept(line);
               immutableBindings.forEach(outBindings);
             });
@@ -2168,15 +2175,20 @@ public class Compiler {
         }
         // Add the new bindings to session.globalEnv so closures created by
         // this statement automatically see the latest bindings (including
-        // themselves) when they are eventually invoked.
+        // themselves) when they are eventually invoked. The synthetic 'it'
+        // binding produced for composite val declarations (skipPat) is
+        // intentionally omitted: it must not become user-visible.
         for (Binding b : outBindings0) {
+          if (b.id == skipPat) {
+            continue;
+          }
           session.globalEnv.put(b.id.name, b.value);
         }
         for (Binding binding : outBindings0) {
-          outBindings.accept(binding);
           if (binding.id == skipPat) {
             continue;
           }
+          outBindings.accept(binding);
           final Pretty pretty = getPretty(session.map, session.bagPrinter());
           final Core.NamedPat id =
               binding.overloadId != null ? binding.overloadId : binding.id;
@@ -2210,6 +2222,12 @@ public class Compiler {
 
     private Pretty getPretty(Map<Prop, Object> map, BagPrinter bagPrinter) {
       int stringDepth = Prop.STRING_DEPTH.intValue(map);
+      // STRING_FOLD is optional and only takes effect for values >= 1.
+      // Treat unset (null) and any non-positive value as 0, which the
+      // tabular printer treats as "folding disabled".
+      Integer stringFoldObj = (Integer) Prop.STRING_FOLD.get(map);
+      int stringFold =
+          stringFoldObj != null && stringFoldObj > 0 ? stringFoldObj : 0;
       int lineWidth = Prop.LINE_WIDTH.intValue(map);
       Prop.Output output = Prop.OUTPUT.enumValue(map, Prop.Output.class);
       int printDepth = Prop.PRINT_DEPTH.intValue(map);
@@ -2221,6 +2239,7 @@ public class Compiler {
           printLength,
           printDepth,
           stringDepth,
+          stringFold,
           bagPrinter);
     }
   }

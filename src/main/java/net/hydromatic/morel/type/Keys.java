@@ -181,7 +181,7 @@ public class Keys {
       default:
         if (op == Op.TUPLE_TYPE) {
           return TypeSystem.unparseList(
-              buf, Op.TIMES, left, right, argNameTypes.values());
+              buf, Op.TUPLE_TYPE, left, right, argNameTypes.values());
         }
         // fall through
       case 1:
@@ -404,6 +404,13 @@ public class Keys {
     public Type toType(TypeSystem typeSystem) {
       final Type type = key.toType(typeSystem);
       if (type instanceof ForallType) {
+        final ForallType forallType = (ForallType) type;
+        checkArgument(
+            args.size() == forallType.parameterCount,
+            "type %s expects %s argument(s), got %s",
+            key,
+            forallType.parameterCount,
+            args.size());
         return type.substitute(typeSystem, typeSystem.typesFor(args));
       }
       throw new AssertionError();
@@ -414,6 +421,17 @@ public class Keys {
       return new ApplyKey(
           key.copy(transform),
           transformEager(args, arg -> arg.copy(transform)));
+    }
+
+    @Override
+    Type.Key substitute(List<? extends Type> types) {
+      final Type.Key newKey = key.substitute(types);
+      final ImmutableList<Type.Key> newArgs =
+          transformEager(args, arg -> arg.substitute(types));
+      if (newKey == key && newArgs.equals(args)) {
+        return this;
+      }
+      return new ApplyKey(newKey, newArgs);
     }
   }
 
@@ -468,6 +486,15 @@ public class Keys {
     }
 
     @Override
+    Type.Key substitute(List<? extends Type> types) {
+      final Type.Key newArg = args.get(0).substitute(types);
+      if (newArg == args.get(0)) {
+        return this;
+      }
+      return new ListKey(newArg);
+    }
+
+    @Override
     public Type toType(TypeSystem typeSystem) {
       return new ListType(typeSystem.typeFor(args.get(0)));
     }
@@ -478,6 +505,16 @@ public class Keys {
     FnKey(Type.Key paramType, Type.Key resultType) {
       super(Op.FN, ImmutableList.of(paramType, resultType));
       checkArgument(args.size() == 2);
+    }
+
+    @Override
+    Type.Key substitute(List<? extends Type> types) {
+      final Type.Key newParam = args.get(0).substitute(types);
+      final Type.Key newResult = args.get(1).substitute(types);
+      if (newParam == args.get(0) && newResult == args.get(1)) {
+        return this;
+      }
+      return new FnKey(newParam, newResult);
     }
 
     @Override

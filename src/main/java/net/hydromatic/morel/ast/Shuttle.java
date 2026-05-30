@@ -103,12 +103,41 @@ public class Shuttle {
         annotatedExp.type.accept(this));
   }
 
+  protected Ast.Exp visit(Ast.AttributedExp attributedExp) {
+    return ast.attributedExp(
+        attributedExp.pos,
+        attributedExp.exp.accept(this),
+        attributedExp.attributes);
+  }
+
+  protected Ast.Decl visit(Ast.AttributedDecl attributedDecl) {
+    return ast.attributedDecl(
+        attributedDecl.pos,
+        attributedDecl.decl.accept(this),
+        attributedDecl.attributes);
+  }
+
+  protected Ast.Type visit(Ast.AttributedType attributedType) {
+    return ast.attributedType(
+        attributedType.pos,
+        attributedType.type.accept(this),
+        attributedType.attributes);
+  }
+
+  protected Ast.Decl visit(Ast.FloatingAttrDecl floatingAttrDecl) {
+    return floatingAttrDecl;
+  }
+
   protected Ast.Exp visit(Ast.If ifThenElse) {
     return ast.ifThenElse(
         ifThenElse.pos,
         ifThenElse.condition.accept(this),
         ifThenElse.ifTrue.accept(this),
         ifThenElse.ifFalse.accept(this));
+  }
+
+  protected Ast.Exp visit(Ast.Raise raise) {
+    return ast.raise(raise.pos, raise.exp.accept(this));
   }
 
   protected Ast.Let visit(Ast.Let let) {
@@ -191,6 +220,22 @@ public class Shuttle {
 
   protected Ast.ListExp visit(Ast.ListExp list) {
     return ast.list(list.pos, visitList(list.args));
+  }
+
+  protected Ast.RangeList visit(Ast.RangeList list) {
+    final List<Ast.RangeListItem> newItems = new ArrayList<>(list.items.size());
+    boolean changed = false;
+    for (Ast.RangeListItem item : list.items) {
+      Ast.Exp newLo = item.lo == null ? null : item.lo.accept(this);
+      Ast.Exp newHi = item.hi == null ? null : item.hi.accept(this);
+      if (newLo != item.lo || newHi != item.hi) {
+        changed = true;
+        newItems.add(new Ast.RangeListItem(item.kind, newLo, newHi));
+      } else {
+        newItems.add(item);
+      }
+    }
+    return changed ? ast.rangeList(list.pos, newItems) : list;
   }
 
   protected Ast.Exp visit(Ast.Record record) {
@@ -289,6 +334,17 @@ public class Shuttle {
         exceptionSpec.pos,
         exceptionSpec.name,
         exceptionSpec.type == null ? null : exceptionSpec.type.accept(this));
+  }
+
+  protected Ast.Spec visit(Ast.AttributedSpec attributedSpec) {
+    return ast.attributedSpec(
+        attributedSpec.pos,
+        attributedSpec.spec.accept(this),
+        attributedSpec.attributes);
+  }
+
+  protected Ast.Spec visit(Ast.FloatingAttrSpec floatingAttrSpec) {
+    return floatingAttrSpec;
   }
 
   protected Ast.ValDecl visit(Ast.ValDecl valDecl) {
@@ -534,6 +590,10 @@ public class Shuttle {
 
   protected Core.Exp visit(Core.Case caseOf) {
     return caseOf.copy(caseOf.exp.accept(this), visitList(caseOf.matchList));
+  }
+
+  protected Core.Exp visit(Core.Raise raise) {
+    return raise.copy(raise.type, raise.exp.accept(this));
   }
 
   protected Core.Match visit(Core.Match match) {

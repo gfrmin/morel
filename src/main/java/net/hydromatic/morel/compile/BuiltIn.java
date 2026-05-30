@@ -1455,6 +1455,20 @@ public enum BuiltIn {
   /** Function "Int.div", of type "int * int &rarr; int". */
   INT_DIV("Int", "div", ts -> ts.fnType(ts.tupleType(INT, INT), INT)),
 
+  /**
+   * Function "Int.fmt", of type "StringCvt.radix &rarr; int &rarr; string".
+   *
+   * <p>{@code fmt radix i} converts {@code i} to a string. The hexadecimal
+   * digits 10 through 15 are represented as {@code A} through {@code F}, and a
+   * negative number is prefixed with a tilde {@code ~}.
+   */
+  INT_FMT(
+      "Int",
+      "fmt",
+      ts ->
+          ts.fnType(
+              ts.lookup(Datatype.STRING_CVT_RADIX), ts.fnType(INT, STRING))),
+
   /** Function "Int.fromInt", of type "int &rarr; int". */
   INT_FROM_INT("Int", "fromInt", ts -> ts.fnType(INT, INT)),
 
@@ -2861,6 +2875,18 @@ public enum BuiltIn {
       ts -> ts.forallType(1, h -> ts.fnType(h.discreteSet(0), h.list(0)))),
 
   /**
+   * Function "Range.flatten", of type "&alpha; range list &rarr; &alpha; list".
+   *
+   * <p>Enumerates the values in the given list of ranges, preserving the order
+   * of first occurrence and dropping duplicates.
+   */
+  RANGE_FLATTEN(
+      "Range",
+      "flatten",
+      ts ->
+          ts.forallType(1, h -> ts.fnType(ts.listType(h.range(0)), h.list(0)))),
+
+  /**
    * Function "Real.abs", of type "real &rarr; real".
    *
    * <p>Returns the absolute value of {@code r}.
@@ -2915,6 +2941,22 @@ public enum BuiltIn {
    * <p>Returns smallest int not less than {@code r}.
    */
   REAL_FLOOR("Real", "floor", "floor", true, ts -> ts.fnType(REAL, INT)),
+
+  /**
+   * Function "Real.fmt", of type "StringCvt.realfmt &rarr; real &rarr; string".
+   *
+   * <p>{@code fmt spec r} converts {@code r} to a string according to {@code
+   * spec}. Raises {@code Size} if {@code spec} is an invalid precision (e.g. a
+   * negative count, or {@code GEN (SOME 0)}). The precision is validated as
+   * soon as {@code spec} is bound.
+   */
+  REAL_FMT(
+      "Real",
+      "fmt",
+      true,
+      ts ->
+          ts.fnType(
+              ts.lookup(Datatype.STRING_CVT_REALFMT), ts.fnType(REAL, STRING))),
 
   /**
    * Function "Real.fromInt", of type "int &rarr; real". Converts the integer
@@ -3530,6 +3572,28 @@ public enum BuiltIn {
       ts -> ts.fnType(STRING, ts.listType(STRING), STRING)),
 
   /**
+   * Function "StringCvt.padLeft", of type "char &rarr; int &rarr; string &rarr;
+   * string".
+   *
+   * <p>{@code padLeft c i s} returns {@code s} padded on the left with {@code
+   * c} characters so that the result has length at least {@code i}. If {@code
+   * s} is already at least {@code i} characters long, it is returned unchanged.
+   */
+  STRING_CVT_PAD_LEFT(
+      "StringCvt", "padLeft", ts -> ts.fnType(CHAR, INT, STRING, STRING)),
+
+  /**
+   * Function "StringCvt.padRight", of type "char &rarr; int &rarr; string
+   * &rarr; string".
+   *
+   * <p>{@code padRight c i s} returns {@code s} padded on the right with {@code
+   * c} characters so that the result has length at least {@code i}. If {@code
+   * s} is already at least {@code i} characters long, it is returned unchanged.
+   */
+  STRING_CVT_PAD_RIGHT(
+      "StringCvt", "padRight", ts -> ts.fnType(CHAR, INT, STRING, STRING)),
+
+  /**
    * Function "String.explode", of type "string &rarr; char list".
    *
    * <p>"explode s" is the list of characters in the string s.
@@ -3741,6 +3805,18 @@ public enum BuiltIn {
                   .build()),
       null,
       session -> session.file.get()),
+
+  /**
+   * Function "Sys.parseTree", of type "string &rarr; string".
+   *
+   * <p>{@code parseTree s} parses {@code s} as a top-level Morel statement and
+   * returns a parenthesized S-expression-style dump of the resulting AST.
+   * Useful for testing parser behavior (e.g. operator precedence and attribute
+   * attachment) from {@code .smli} scripts.
+   *
+   * <p>Raises {@code Error} if the string does not parse.
+   */
+  SYS_PARSE_TREE("Sys", "parseTree", ts -> ts.fnType(STRING, STRING)),
 
   /** Function "Sys.plan", aka "plan", of type "unit &rarr; string". */
   SYS_PLAN("Sys", "plan", "plan", ts -> ts.fnType(UNIT, STRING)),
@@ -4751,6 +4827,14 @@ public enum BuiltIn {
         return OP_GE;
       case OP_LT:
         return OP_GT;
+      case CHAR_OP_GE:
+        return CHAR_OP_LE;
+      case CHAR_OP_GT:
+        return CHAR_OP_LT;
+      case CHAR_OP_LE:
+        return CHAR_OP_GE;
+      case CHAR_OP_LT:
+        return CHAR_OP_GT;
       default:
         throw new AssertionError("unexpected: " + this);
     }
@@ -4880,7 +4964,25 @@ public enum BuiltIn {
         2,
         h -> h.tyCon(Constructor.EITHER_INL).tyCon(Constructor.EITHER_INR)),
 
-    EXN("General", "exn", false, 0, h -> h),
+    EXN(
+        "General",
+        "exn",
+        false,
+        0,
+        h ->
+            h.tyCon(Constructor.EXN_BIND)
+                .tyCon(Constructor.EXN_CHR)
+                .tyCon(Constructor.EXN_DIV)
+                .tyCon(Constructor.EXN_DOMAIN)
+                .tyCon(Constructor.EXN_EMPTY)
+                .tyCon(Constructor.EXN_FAIL)
+                .tyCon(Constructor.EXN_MATCH)
+                .tyCon(Constructor.EXN_OVERFLOW)
+                .tyCon(Constructor.EXN_SIZE)
+                .tyCon(Constructor.EXN_SPAN)
+                .tyCon(Constructor.EXN_SUBSCRIPT)
+                .tyCon(Constructor.EXN_UNEQUAL_LENGTHS)
+                .tyCon(Constructor.EXN_UNORDERED)),
 
     OPTION(
         "Option",
@@ -4945,6 +5047,28 @@ public enum BuiltIn {
                 .tyCon(Constructor.RANGE_OPEN)
                 .tyCon(Constructor.RANGE_OPEN_CLOSED)
                 .tyCon(Constructor.RANGE_POINT)),
+
+    STRING_CVT_RADIX(
+        "StringCvt",
+        "radix",
+        false,
+        0,
+        h ->
+            h.tyCon(Constructor.STRING_CVT_RADIX_BIN)
+                .tyCon(Constructor.STRING_CVT_RADIX_DEC)
+                .tyCon(Constructor.STRING_CVT_RADIX_HEX)
+                .tyCon(Constructor.STRING_CVT_RADIX_OCT)),
+
+    STRING_CVT_REALFMT(
+        "StringCvt",
+        "realfmt",
+        false,
+        0,
+        h ->
+            h.tyCon(Constructor.STRING_CVT_REALFMT_EXACT)
+                .tyCon(Constructor.STRING_CVT_REALFMT_FIX)
+                .tyCon(Constructor.STRING_CVT_REALFMT_GEN)
+                .tyCon(Constructor.STRING_CVT_REALFMT_SCI)),
 
     /**
      * Universal value representation for embedded language interoperability.
@@ -5110,6 +5234,28 @@ public enum BuiltIn {
                 Keys.apply(Keys.name("range"), ImmutableList.of(h.get(0))))),
     EITHER_INL(Datatype.EITHER, "INL", h -> h.get(0)),
     EITHER_INR(Datatype.EITHER, "INR", h -> h.get(1)),
+    // Built-in exceptions. Some (Date, Error, Option, Time) are not chained
+    // on the EXN datatype below — they are intentionally not visible at top
+    // level (Date/Option/Time would clash with a structure name; Error is
+    // not in the standard basis). They exist here so that
+    // Codes.BuiltInExn can refer to them by name.
+    EXN_BIND(Datatype.EXN, "Bind"),
+    EXN_CHR(Datatype.EXN, "Chr"),
+    EXN_DATE(Datatype.EXN, "Date"),
+    EXN_DIV(Datatype.EXN, "Div"),
+    EXN_DOMAIN(Datatype.EXN, "Domain"),
+    EXN_EMPTY(Datatype.EXN, "Empty"),
+    EXN_ERROR(Datatype.EXN, "Error"),
+    EXN_FAIL(Datatype.EXN, "Fail", h -> STRING.key()),
+    EXN_MATCH(Datatype.EXN, "Match"),
+    EXN_OPTION(Datatype.EXN, "Option"),
+    EXN_OVERFLOW(Datatype.EXN, "Overflow"),
+    EXN_SIZE(Datatype.EXN, "Size"),
+    EXN_SPAN(Datatype.EXN, "Span"),
+    EXN_SUBSCRIPT(Datatype.EXN, "Subscript"),
+    EXN_TIME(Datatype.EXN, "Time"),
+    EXN_UNEQUAL_LENGTHS(Datatype.EXN, "UnequalLengths"),
+    EXN_UNORDERED(Datatype.EXN, "Unordered"),
     LIST_CONS(Datatype.PSEUDO_LIST, "CONS", h -> h.get(0)),
     LIST_NIL(Datatype.PSEUDO_LIST, "NIL"),
     OPTION_NONE(Datatype.OPTION, "NONE"),
@@ -5139,6 +5285,23 @@ public enum BuiltIn {
         "OPEN_CLOSED",
         h -> Keys.tuple(ImmutableList.of(h.get(0), h.get(0)))),
     RANGE_POINT(Datatype.RANGE, "POINT", h -> h.get(0)),
+    STRING_CVT_RADIX_BIN(Datatype.STRING_CVT_RADIX, "BIN"),
+    STRING_CVT_RADIX_DEC(Datatype.STRING_CVT_RADIX, "DEC"),
+    STRING_CVT_RADIX_HEX(Datatype.STRING_CVT_RADIX, "HEX"),
+    STRING_CVT_RADIX_OCT(Datatype.STRING_CVT_RADIX, "OCT"),
+    STRING_CVT_REALFMT_EXACT(Datatype.STRING_CVT_REALFMT, "EXACT"),
+    STRING_CVT_REALFMT_FIX(
+        Datatype.STRING_CVT_REALFMT,
+        "FIX",
+        h -> Keys.apply(Keys.name("option"), ImmutableList.of(INT.key()))),
+    STRING_CVT_REALFMT_GEN(
+        Datatype.STRING_CVT_REALFMT,
+        "GEN",
+        h -> Keys.apply(Keys.name("option"), ImmutableList.of(INT.key()))),
+    STRING_CVT_REALFMT_SCI(
+        Datatype.STRING_CVT_REALFMT,
+        "SCI",
+        h -> Keys.apply(Keys.name("option"), ImmutableList.of(INT.key()))),
     VARIANT_BAG(Datatype.VARIANT, "BAG", h -> Keys.list(Keys.name("variant"))),
     VARIANT_BOOL(Datatype.VARIANT, "BOOL", h -> BOOL.key()),
     VARIANT_CHAR(Datatype.VARIANT, "CHAR", h -> CHAR.key()),

@@ -47,10 +47,28 @@ public class Visitor {
     annotatedExp.type.accept(this);
   }
 
+  protected void visit(Ast.AttributedExp attributedExp) {
+    attributedExp.exp.accept(this);
+  }
+
+  protected void visit(Ast.AttributedDecl attributedDecl) {
+    attributedDecl.decl.accept(this);
+  }
+
+  protected void visit(Ast.AttributedType attributedType) {
+    attributedType.type.accept(this);
+  }
+
+  protected void visit(Ast.FloatingAttrDecl floatingAttrDecl) {}
+
   protected void visit(Ast.If anIf) {
     anIf.condition.accept(this);
     anIf.ifTrue.accept(this);
     anIf.ifFalse.accept(this);
+  }
+
+  protected void visit(Ast.Raise raise) {
+    raise.exp.accept(this);
   }
 
   protected void visit(Ast.Let let) {
@@ -126,6 +144,18 @@ public class Visitor {
 
   protected void visit(Ast.ListExp list) {
     list.args.forEach(this::accept);
+  }
+
+  protected void visit(Ast.RangeList list) {
+    list.items.forEach(
+        item -> {
+          if (item.lo != null) {
+            accept(item.lo);
+          }
+          if (item.hi != null) {
+            accept(item.hi);
+          }
+        });
   }
 
   protected void visit(Ast.Record record) {
@@ -207,6 +237,12 @@ public class Visitor {
       exceptionSpec.type.accept(this);
     }
   }
+
+  protected void visit(Ast.AttributedSpec attributedSpec) {
+    attributedSpec.spec.accept(this);
+  }
+
+  protected void visit(Ast.FloatingAttrSpec floatingAttrSpec) {}
 
   protected void visit(Ast.ValDecl valDecl) {
     valDecl.valBinds.forEach(this::accept);
@@ -372,6 +408,10 @@ public class Visitor {
   protected void visit(Core.Case kase) {
     kase.exp.accept(this);
     kase.matchList.forEach(this::accept);
+  }
+
+  protected void visit(Core.Raise raise) {
+    raise.exp.accept(this);
   }
 
   protected void visit(Core.Apply apply) {

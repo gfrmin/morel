@@ -26,6 +26,7 @@ import static net.hydromatic.morel.eval.Slots.maxOf;
 import static net.hydromatic.morel.util.Ord.forEachIndexed;
 import static net.hydromatic.morel.util.Pair.forEach;
 import static net.hydromatic.morel.util.Static.SKIP;
+import static net.hydromatic.morel.util.Static.padRightTo;
 import static net.hydromatic.morel.util.Static.transform;
 import static net.hydromatic.morel.util.Static.transformEager;
 
@@ -35,6 +36,10 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
 import com.google.common.primitives.Chars;
+import java.io.StringReader;
+import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -61,14 +66,18 @@ import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import net.hydromatic.morel.ast.AstDumper;
+import net.hydromatic.morel.ast.AstNode;
 import net.hydromatic.morel.ast.Core;
 import net.hydromatic.morel.ast.Pos;
 import net.hydromatic.morel.compile.BuiltIn;
+import net.hydromatic.morel.compile.CompileException;
 import net.hydromatic.morel.compile.Compiles;
 import net.hydromatic.morel.compile.Environment;
 import net.hydromatic.morel.compile.Macro;
 import net.hydromatic.morel.datalog.DatalogEvaluator;
 import net.hydromatic.morel.foreign.RelList;
+import net.hydromatic.morel.parse.MorelParserImpl;
 import net.hydromatic.morel.parse.Parsers;
 import net.hydromatic.morel.type.DataType;
 import net.hydromatic.morel.type.FnType;
@@ -1247,6 +1256,25 @@ public abstract class Codes {
         }
       };
     }
+
+    /**
+     * Overrides the default curry to validate {@code n} as soon as it arrives,
+     * rather than waiting for the second argument. Matches the SML/NJ behavior
+     * of {@code Fn.repeat ~5} raising {@code Domain} immediately.
+     */
+    @Override
+    public Applicable1<Applicable1<Applicable1, Applicable1>, Integer> curry() {
+      return new CurriedApplicable1<
+          Applicable1<Applicable1, Applicable1>, Integer>(builtIn, this) {
+        @Override
+        public Applicable1<Applicable1, Applicable1> apply(Integer n) {
+          if (n < 0) {
+            throw new MorelRuntimeException(BuiltInExn.DOMAIN, pos);
+          }
+          return f -> FnRepeat.this.apply(n, f);
+        }
+      };
+    }
   }
 
   /** @see BuiltIn#FN_UNCURRY */
@@ -1275,7 +1303,7 @@ public abstract class Codes {
       new BaseApplicable1<String, BuiltInExn>(BuiltIn.GENERAL_EXN_MESSAGE) {
         @Override
         public String apply(BuiltInExn arg) {
-          return arg.mlName;
+          return arg.mlName();
         }
       };
 
@@ -1284,7 +1312,7 @@ public abstract class Codes {
       new BaseApplicable1<String, BuiltInExn>(BuiltIn.GENERAL_EXN_NAME) {
         @Override
         public String apply(BuiltInExn arg) {
-          return arg.structure + "." + arg.mlName;
+          return arg.structure + "." + arg.mlName();
         }
       };
 
@@ -1349,6 +1377,34 @@ public abstract class Codes {
 
   /** @see BuiltIn#INT_DIV */
   private static final Applicable2 INT_DIV = new IntDiv(BuiltIn.INT_DIV);
+
+  /** @see BuiltIn#INT_FMT */
+  private static final Applicable2 INT_FMT =
+      new BaseApplicable2<String, List, Integer>(BuiltIn.INT_FMT) {
+        @Override
+        public String apply(List radix, Integer i) {
+          final int base;
+          switch ((String) radix.get(0)) {
+            case "BIN":
+              base = 2;
+              break;
+            case "OCT":
+              base = 8;
+              break;
+            case "DEC":
+              base = 10;
+              break;
+            case "HEX":
+              base = 16;
+              break;
+            default:
+              throw new AssertionError(radix);
+          }
+          // Use upper-case digits A..F for hex, prefix '-' with '~'.
+          final String s = Integer.toString(i, base).toUpperCase(Locale.ROOT);
+          return s.startsWith("-") ? "~" + s.substring(1) : s;
+        }
+      };
 
   /** @see BuiltIn#INT_FROM_INT */
   private static final Applicable1 INT_FROM_INT =
@@ -2906,6 +2962,10 @@ public abstract class Codes {
       new DiscreteSetEnumerate(
           BuiltIn.RANGE_DISCRETE_SET_TO_LIST, Discretes.dummy());
 
+  /** @see BuiltIn#RANGE_FLATTEN */
+  private static final Applicable RANGE_FLATTEN =
+      new RangeFlatten(Discretes.dummy());
+
   /** @see BuiltIn#REAL_ABS */
   private static final Applicable REAL_ABS =
       new BaseApplicable1<Float, Float>(BuiltIn.REAL_ABS) {
@@ -3034,6 +3094,222 @@ public abstract class Codes {
           }
         }
       };
+
+  /** @see BuiltIn#REAL_FMT */
+  private static final Applicable2 REAL_FMT = new RealFmt(Pos.ZERO);
+
+  /** Implements {@link #REAL_FMT}. */
+  private static class RealFmt
+      extends BasePositionedApplicable2<String, List, Float> {
+    RealFmt(Pos pos) {
+      super(BuiltIn.REAL_FMT, pos);
+    }
+
+    @Override
+    public RealFmt withPos(Pos pos) {
+      return new RealFmt(pos);
+    }
+
+    @Override
+    public String apply(List spec, Float r) {
+      return format(parseSpec(spec), r);
+    }
+
+    /**
+     * Validates {@code spec} on partial application so that {@code Real.fmt
+     * (StringCvt.SCI (SOME ~1))} raises {@code Size} immediately, matching
+     * SML/NJ's behavior.
+     */
+    @Override
+    public Applicable1<Applicable1<String, Float>, List> curry() {
+      return new CurriedApplicable1<Applicable1<String, Float>, List>(
+          builtIn, this) {
+        @Override
+        public Applicable1<String, Float> apply(List spec) {
+          final FmtSpec info = parseSpec(spec);
+          return r -> format(info, r);
+        }
+      };
+    }
+
+    /** Spec kind + precision, after validation. */
+    private static class FmtSpec {
+      final String kind;
+      final int n;
+
+      FmtSpec(String kind, int n) {
+        this.kind = kind;
+        this.n = n;
+      }
+    }
+
+    private FmtSpec parseSpec(List spec) {
+      final String kind = (String) spec.get(0);
+      if (kind.equals("EXACT")) {
+        return new FmtSpec("EXACT", 0);
+      }
+      final List opt = (List) spec.get(1);
+      final Integer n = opt.size() == 2 ? (Integer) opt.get(1) : null;
+      final int defaultN;
+      final int minN;
+      switch (kind) {
+        case "SCI":
+          defaultN = 6;
+          minN = 0;
+          break;
+        case "FIX":
+          defaultN = 6;
+          minN = 0;
+          break;
+        case "GEN":
+          defaultN = 12;
+          minN = 1;
+          break;
+        default:
+          throw new AssertionError("unknown realfmt: " + kind);
+      }
+      if (n != null && n < minN) {
+        throw new MorelRuntimeException(BuiltInExn.SIZE, pos);
+      }
+      return new FmtSpec(kind, n != null ? n : defaultN);
+    }
+
+    private static String format(FmtSpec info, float r) {
+      if (Float.isNaN(r)) {
+        return "nan";
+      }
+      if (r == Float.POSITIVE_INFINITY) {
+        return "inf";
+      }
+      if (r == Float.NEGATIVE_INFINITY) {
+        return "~inf";
+      }
+      switch (info.kind) {
+        case "SCI":
+          return formatSci(r, info.n);
+        case "FIX":
+          return formatFix(r, info.n);
+        case "GEN":
+          return formatGen(r, info.n);
+        case "EXACT":
+          return formatExact(r);
+        default:
+          throw new AssertionError();
+      }
+    }
+
+    /** Returns "~" for negative reals (including {@code ~0.0}), else "". */
+    private static String signPrefix(float r) {
+      return Float.floatToRawIntBits(r) < 0 ? "~" : "";
+    }
+
+    /** Formats {@code abs} as a non-negative BigDecimal with the bits of r. */
+    private static BigDecimal toBigDecimal(float r) {
+      return new BigDecimal(FLOAT_TO_STRING.apply(Math.abs(r)));
+    }
+
+    private static String formatFix(float r, int n) {
+      final StringBuilder sb = new StringBuilder(signPrefix(r));
+      if (r == 0.0f) {
+        sb.append('0');
+        if (n > 0) {
+          sb.append('.');
+          padRightTo(sb, sb.length() + n, '0');
+        }
+        return sb.toString();
+      }
+      final BigDecimal bd = toBigDecimal(r).setScale(n, RoundingMode.HALF_DOWN);
+      return sb.append(bd.toPlainString()).toString();
+    }
+
+    /** Formats r as {@code D.dddE±exp} with n digits after the decimal. */
+    private static String formatSci(float r, int n) {
+      final StringBuilder sb = new StringBuilder(signPrefix(r));
+      if (r == 0.0f) {
+        sb.append('0');
+        if (n > 0) {
+          sb.append('.');
+          padRightTo(sb, sb.length() + n, '0');
+        }
+        return sb.append("E0").toString();
+      }
+      // Express |r| as mantissa * 10^exp where mantissa in [1, 10).
+      final BigDecimal bd = toBigDecimal(r);
+      int exp = decimalExp(bd);
+      BigDecimal mantissa =
+          bd.movePointLeft(exp).setScale(n, RoundingMode.HALF_DOWN);
+      // Rounding may push the mantissa to exactly 10; renormalize.
+      if (mantissa.compareTo(BigDecimal.TEN) >= 0) {
+        mantissa = mantissa.movePointLeft(1);
+        exp++;
+      }
+      sb.append(mantissa.toPlainString()).append('E');
+      return appendSmlExp(sb, exp).toString();
+    }
+
+    /** Formats r as {@code 0.dddE±exp} with no trailing zeros. */
+    private static String formatExact(float r) {
+      final StringBuilder sb = new StringBuilder(signPrefix(r));
+      if (r == 0.0f) {
+        return sb.append("0.0").toString();
+      }
+      // bd is already non-negative because toBigDecimal uses Math.abs.
+      final BigDecimal bd = toBigDecimal(r).stripTrailingZeros();
+      // Emit as 0.<digits>; the exponent is one greater than the standard
+      // scientific exponent because the implied decimal point moves left by 1.
+      sb.append("0.").append(bd.unscaledValue().toString());
+      final int exp = decimalExp(bd) + 1;
+      if (exp == 0) {
+        return sb.toString();
+      }
+      return appendSmlExp(sb.append('E'), exp).toString();
+    }
+
+    /**
+     * Formats r with at most n significant digits, using fixed-point notation
+     * when the exponent is in {@code [-2, n)}, scientific notation otherwise.
+     * Trailing zeros are dropped.
+     */
+    private static String formatGen(float r, int n) {
+      final StringBuilder sb = new StringBuilder(signPrefix(r));
+      if (r == 0.0f) {
+        return sb.append('0').toString();
+      }
+      // Round to n significant digits, drop trailing zeros, then compute the
+      // exponent (rounding 9.99 to 3 s.f. gives 10.0, which is 1E1).
+      final BigDecimal bd =
+          toBigDecimal(r)
+              .round(new MathContext(n, RoundingMode.HALF_DOWN))
+              .stripTrailingZeros();
+      final int exp = decimalExp(bd);
+      // SML/NJ uses scientific form when exp <= -3 or exp >= n (i.e., the
+      // value would otherwise need leading zeros or be very large).
+      if (exp <= -3 || exp >= n) {
+        sb.append(bd.movePointLeft(exp).toPlainString()).append('E');
+        return appendSmlExp(sb, exp).toString();
+      }
+      // Fixed: emit at full precision, no trailing zeros.
+      return sb.append(bd.toPlainString()).toString();
+    }
+
+    /**
+     * The exponent that would appear in standard scientific notation — 0 for
+     * [1, 10), 1 for [10, 100), -1 for [0.1, 1), etc. Assumes {@code bd} is
+     * non-zero.
+     */
+    private static int decimalExp(BigDecimal bd) {
+      return bd.precision() - bd.scale() - 1;
+    }
+
+    /** Appends {@code exp} to {@code sb} using SML's {@code ~} for negative. */
+    private static StringBuilder appendSmlExp(StringBuilder sb, int exp) {
+      if (exp < 0) {
+        sb.append('~');
+        exp = -exp;
+      }
+      return sb.append(exp);
+    }
+  }
 
   /** @see BuiltIn#REAL_FROM_INT */
   private static final Applicable REAL_FROM_INT =
@@ -3715,6 +3991,35 @@ public abstract class Codes {
     }
   }
 
+  /** @see BuiltIn#STRING_CVT_PAD_LEFT */
+  private static final Applicable STRING_CVT_PAD_LEFT =
+      new BaseApplicable3<String, Character, Integer, String>(
+          BuiltIn.STRING_CVT_PAD_LEFT) {
+        @Override
+        public String apply(Character c, Integer i, String s) {
+          if (s.length() >= i) {
+            return s;
+          }
+          final StringBuilder sb = new StringBuilder(i);
+          padRightTo(sb, i - s.length(), c);
+          return sb.append(s).toString();
+        }
+      };
+
+  /** @see BuiltIn#STRING_CVT_PAD_RIGHT */
+  private static final Applicable STRING_CVT_PAD_RIGHT =
+      new BaseApplicable3<String, Character, Integer, String>(
+          BuiltIn.STRING_CVT_PAD_RIGHT) {
+        @Override
+        public String apply(Character c, Integer i, String s) {
+          if (s.length() >= i) {
+            return s;
+          }
+          final StringBuilder sb = new StringBuilder(i).append(s);
+          return padRightTo(sb, i, c).toString();
+        }
+      };
+
   /** @see BuiltIn#STRING_EXPLODE */
   private static final Applicable1 STRING_EXPLODE =
       new BaseApplicable1<List, String>(BuiltIn.STRING_EXPLODE) {
@@ -4014,6 +4319,28 @@ public abstract class Codes {
         core.functionLiteral(typeSystem, BuiltIn.Z_LIST),
         core.tuple(typeSystem, null, args));
   }
+
+  /** @see BuiltIn#SYS_PARSE_TREE */
+  private static final Applicable SYS_PARSE_TREE =
+      new ApplicableImpl(BuiltIn.SYS_PARSE_TREE) {
+        @Override
+        public Object apply(Stack stack, Object arg) {
+          final String source = (String) arg;
+          final MorelParserImpl parser =
+              new MorelParserImpl(new StringReader(source));
+          parser.zero("parseTree");
+          final AstNode node;
+          try {
+            node = parser.statementSemicolonOrEofSafe();
+          } catch (RuntimeException e) {
+            throw new RuntimeException("Sys.parseTree: " + e.getMessage(), e);
+          }
+          if (node == null) {
+            return "()";
+          }
+          return AstDumper.dump(node);
+        }
+      };
 
   /** @see BuiltIn#SYS_PLAN */
   private static final Applicable SYS_PLAN =
@@ -4852,6 +5179,11 @@ public abstract class Codes {
     return new OrElseCode(code0, code1);
   }
 
+  /** Returns a Code that implements a {@code raise} expression. */
+  public static Code raise(Code expCode, Pos pos) {
+    return new RaiseCode(expCode, pos);
+  }
+
   /** @see BuiltIn#Z_ORDINAL */
   public static Code ordinalGet(int[] ordinalSlots) {
     return new OrdinalGetCode(ordinalSlots);
@@ -5326,6 +5658,7 @@ public abstract class Codes {
           .put(BuiltIn.INT_ABS, INT_ABS)
           .put(BuiltIn.INT_COMPARE, INT_COMPARE)
           .put(BuiltIn.INT_DIV, INT_DIV)
+          .put(BuiltIn.INT_FMT, INT_FMT)
           .put(BuiltIn.INT_FROM_INT, INT_FROM_INT)
           .put(BuiltIn.INT_FROM_LARGE, INT_FROM_LARGE)
           .put(BuiltIn.INT_FROM_STRING, INT_FROM_STRING)
@@ -5437,6 +5770,7 @@ public abstract class Codes {
           .put(BuiltIn.REAL_COPY_SIGN, REAL_COPY_SIGN)
           .put(BuiltIn.REAL_DIVIDE, REAL_DIVIDE)
           .put(BuiltIn.REAL_FLOOR, REAL_FLOOR)
+          .put(BuiltIn.REAL_FMT, REAL_FMT)
           .put(BuiltIn.REAL_FROM_INT, REAL_FROM_INT)
           .put(BuiltIn.REAL_FROM_MAN_EXP, REAL_FROM_MAN_EXP)
           .put(BuiltIn.REAL_FROM_STRING, REAL_FROM_STRING)
@@ -5484,6 +5818,7 @@ public abstract class Codes {
           .put(BuiltIn.RANGE_DISCRETE_SET_RANGES, RANGE_DISCRETE_SET_RANGES)
           .put(BuiltIn.RANGE_DISCRETE_SET_TO_BAG, RANGE_DISCRETE_SET_TO_BAG)
           .put(BuiltIn.RANGE_DISCRETE_SET_TO_LIST, RANGE_DISCRETE_SET_TO_LIST)
+          .put(BuiltIn.RANGE_FLATTEN, RANGE_FLATTEN)
           .put(BuiltIn.RELATIONAL_ARG_MAX, RELATIONAL_ARG_MAX)
           .put(BuiltIn.RELATIONAL_ARG_MIN, RELATIONAL_ARG_MIN)
           .put(BuiltIn.RELATIONAL_COMPARE, RELATIONAL_COMPARE)
@@ -5501,6 +5836,8 @@ public abstract class Codes {
           .put(BuiltIn.STRING_COMPARE, STRING_COMPARE)
           .put(BuiltIn.STRING_CONCAT, STRING_CONCAT)
           .put(BuiltIn.STRING_CONCAT_WITH, STRING_CONCAT_WITH)
+          .put(BuiltIn.STRING_CVT_PAD_LEFT, STRING_CVT_PAD_LEFT)
+          .put(BuiltIn.STRING_CVT_PAD_RIGHT, STRING_CVT_PAD_RIGHT)
           .put(BuiltIn.STRING_EXPLODE, STRING_EXPLODE)
           .put(BuiltIn.STRING_EXTRACT, STRING_EXTRACT)
           .put(BuiltIn.STRING_FIELDS, STRING_FIELDS)
@@ -5526,6 +5863,7 @@ public abstract class Codes {
           // Value of Sys.file comes from Session.file, but initial value must
           // be a List because it has (progressive) record type.
           .put(BuiltIn.SYS_FILE, ImmutableList.of())
+          .put(BuiltIn.SYS_PARSE_TREE, SYS_PARSE_TREE)
           .put(BuiltIn.SYS_PLAN, SYS_PLAN)
           .put(BuiltIn.SYS_PLAN_EX, SYS_PLAN_EX)
           .put(BuiltIn.SYS_SET, SYS_SET)
@@ -5636,11 +5974,14 @@ public abstract class Codes {
   /**
    * Converts a Java {@code float} to the format expected of Standard ML {@code
    * real} values.
+   *
+   * <p>Matches Standard ML's {@code Real.toString}, which drops the trailing
+   * ".0" from whole-number reals (so {@code 1.0} prints as "1" and {@code
+   * 1.0e10} prints as "1E10").
    */
   public static String floatToString(float f) {
     if (Float.isFinite(f)) {
-      final String s = FLOAT_TO_STRING.apply(f);
-      return s.replace('-', '~');
+      return stripTrailingZero(FLOAT_TO_STRING.apply(f)).replace('-', '~');
     } else if (f == Float.POSITIVE_INFINITY) {
       return "inf";
     } else if (f == Float.NEGATIVE_INFINITY) {
@@ -5650,6 +5991,22 @@ public abstract class Codes {
     } else {
       throw new AssertionError("unknown float " + f);
     }
+  }
+
+  /**
+   * If the mantissa part of the given Java float string ends with ".0", removes
+   * those two characters. For example, "1.0" becomes "1" and "1.0E10" becomes
+   * "1E10". Leaves strings like "1.5" and "1.5E10" unchanged.
+   */
+  private static String stripTrailingZero(String s) {
+    int e = s.indexOf('E');
+    int mantissaEnd = e < 0 ? s.length() : e;
+    if (mantissaEnd >= 2
+        && s.charAt(mantissaEnd - 1) == '0'
+        && s.charAt(mantissaEnd - 2) == '.') {
+      return s.substring(0, mantissaEnd - 2) + s.substring(mantissaEnd);
+    }
+    return s;
   }
 
   private static String floatToString0(float f) {
@@ -5814,23 +6171,37 @@ public abstract class Codes {
   public static class MorelRuntimeException extends RuntimeException
       implements MorelException {
     private final BuiltInExn e;
+    private final @Nullable Object payload;
     private final Pos pos;
 
     /** Creates a MorelRuntimeException. */
     public MorelRuntimeException(BuiltInExn e, Pos pos) {
+      this(e, null, pos);
+    }
+
+    /** Creates a MorelRuntimeException with a runtime payload. */
+    public MorelRuntimeException(
+        BuiltInExn e, @Nullable Object payload, Pos pos) {
       this.e = requireNonNull(e);
+      this.payload = payload;
       this.pos = requireNonNull(pos);
     }
 
     @Override
     public String toString() {
-      return e.mlName + " at " + pos;
+      return e.mlName() + " at " + pos;
     }
 
     @Override
     public StringBuilder describeTo(StringBuilder buf) {
-      buf.append("uncaught exception ").append(e.mlName);
-      if (e.description != null) {
+      buf.append("uncaught exception ").append(e.mlName());
+      if (payload != null) {
+        buf.append(" [")
+            .append(e.mlName())
+            .append(": ")
+            .append(payload)
+            .append("]");
+      } else if (e.description != null) {
         buf.append(" [").append(e.description).append("]");
       }
       return buf;
@@ -5845,32 +6216,54 @@ public abstract class Codes {
   /** Definitions of Morel built-in exceptions. */
   public enum BuiltInExn {
     // lint: sort until '##public ' where '##[A-Z]'
-    BIND("General", "Bind", null),
-    CHR("General", "Chr", null),
-    DATE("Date", "Date", null),
-    DIV("General", "Div", null),
-    DOMAIN("General", "Domain", null),
-    EMPTY("List", "Empty", null),
-    ERROR("Interact", "Error", null), // not in standard basis
-    FAIL("General", "Fail", null),
-    MATCH("General", "Match", null),
-    OPTION("Option", "Option", null),
-    OVERFLOW("General", "Overflow", null),
-    SIZE("General", "Size", null),
-    SPAN("General", "Span", null),
-    SUBSCRIPT("General", "Subscript", "subscript out of bounds"),
-    TIME("Time", "Time", null),
-    UNEQUAL_LENGTHS("ListPair", "UnequalLengths", null),
-    UNORDERED("IEEEReal", "Unordered", null);
+    BIND("General", BuiltIn.Constructor.EXN_BIND, null),
+    CHR("General", BuiltIn.Constructor.EXN_CHR, null),
+    DATE("Date", BuiltIn.Constructor.EXN_DATE, null),
+    DIV("General", BuiltIn.Constructor.EXN_DIV, null),
+    DOMAIN("General", BuiltIn.Constructor.EXN_DOMAIN, null),
+    EMPTY("List", BuiltIn.Constructor.EXN_EMPTY, null),
+    ERROR("Interact", BuiltIn.Constructor.EXN_ERROR, null), // not in basis
+    FAIL("General", BuiltIn.Constructor.EXN_FAIL, null),
+    MATCH("General", BuiltIn.Constructor.EXN_MATCH, null),
+    OPTION("Option", BuiltIn.Constructor.EXN_OPTION, null),
+    OVERFLOW("General", BuiltIn.Constructor.EXN_OVERFLOW, null),
+    SIZE("General", BuiltIn.Constructor.EXN_SIZE, null),
+    SPAN("General", BuiltIn.Constructor.EXN_SPAN, null),
+    SUBSCRIPT(
+        "General",
+        BuiltIn.Constructor.EXN_SUBSCRIPT,
+        "subscript out of bounds"),
+    TIME("Time", BuiltIn.Constructor.EXN_TIME, null),
+    UNEQUAL_LENGTHS("ListPair", BuiltIn.Constructor.EXN_UNEQUAL_LENGTHS, null),
+    UNORDERED("IEEEReal", BuiltIn.Constructor.EXN_UNORDERED, null);
+
+    private static final Map<String, BuiltInExn> BY_ML_NAME =
+        Arrays.stream(BuiltInExn.values())
+            .collect(
+                ImmutableMap.toImmutableMap(
+                    BuiltInExn::mlName, e -> e, (a, b) -> a));
+
+    /** Returns the BuiltInExn whose ML-level name is {@code name}, or null. */
+    public static @Nullable BuiltInExn forMlName(String name) {
+      return BY_ML_NAME.get(name);
+    }
 
     public final String structure;
-    public final String mlName;
+    public final BuiltIn.Constructor constructor;
     public final @Nullable String description;
 
-    BuiltInExn(String structure, String mlName, @Nullable String description) {
+    BuiltInExn(
+        String structure,
+        BuiltIn.Constructor constructor,
+        @Nullable String description) {
       this.structure = structure;
-      this.mlName = mlName;
+      this.constructor = constructor;
       this.description = description;
+    }
+
+    /** The exception's ML-level name, taken from its {@link #constructor}. */
+    public String mlName() {
+      return constructor.constructor;
     }
   }
 
@@ -5949,6 +6342,37 @@ public abstract class Codes {
     public Object eval(Stack stack) {
       // Lazy evaluation. If code0 returns true, code1 is never evaluated.
       return (boolean) code0.eval(stack) || (boolean) code1.eval(stack);
+    }
+  }
+
+  /** Code that implements {@link #raise(Code, Pos)}. */
+  private static class RaiseCode implements Code {
+    private final Code expCode;
+    private final Pos pos;
+
+    RaiseCode(Code expCode, Pos pos) {
+      this.expCode = expCode;
+      this.pos = pos;
+    }
+
+    @Override
+    public Describer describe(Describer describer) {
+      return describer.start("raise", d -> d.arg("exp", expCode));
+    }
+
+    @Override
+    public Object eval(Stack stack) {
+      final Object value = expCode.eval(stack);
+      // The runtime value of an `exn` is a list whose head is the constructor
+      // name; subsequent elements (if any) are the payload.
+      final List<?> list = (List<?>) value;
+      final String name = (String) list.get(0);
+      final BuiltInExn e = BuiltInExn.forMlName(name);
+      if (e == null) {
+        throw new IllegalStateException("unknown exception: " + name);
+      }
+      final Object payload = list.size() > 1 ? list.get(1) : null;
+      throw new MorelRuntimeException(e, payload, pos);
     }
   }
 
@@ -7189,6 +7613,58 @@ public abstract class Codes {
       final ImmutableList.Builder<Object> result = ImmutableList.builder();
       ranges.forEach(
           (lo, hi) -> Bound.enumerate(discrete, lo, hi, result::add));
+      return result.build();
+    }
+  }
+
+  /** Implementation of {@link BuiltIn#RANGE_FLATTEN}. */
+  @SuppressWarnings("rawtypes")
+  private static class RangeFlatten extends BaseApplicable1<List, List>
+      implements Typed {
+    /**
+     * Discrete instance for the element type, or null if not discrete (e.g.
+     * {@code real}). When null, only POINT items are finite at runtime.
+     */
+    private final @Nullable Discrete<Object> discrete;
+
+    RangeFlatten(@Nullable Discrete<Object> discrete) {
+      super(BuiltIn.RANGE_FLATTEN);
+      this.discrete = discrete;
+    }
+
+    @Override
+    public Applicable withType(TypeSystem typeSystem, Type type) {
+      Type elemType = rangeElementType(type);
+      Discrete<Object> d;
+      try {
+        d = Discretes.discreteFor(typeSystem, elemType);
+      } catch (CompileException ex) {
+        // Element type is not discrete (e.g. real). POINT items are still
+        // finite; non-POINT items raise Size at runtime.
+        d = null;
+      }
+      return new RangeFlatten(d);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public List apply(List ranges) {
+      final ImmutableList.Builder<Object> result = ImmutableList.builder();
+      for (Object r : ranges) {
+        final List range = (List) r;
+        if (discrete == null) {
+          // Only POINT items are finite over a non-discrete element type.
+          if (!BuiltIn.Constructor.RANGE_POINT.constructor.equals(
+              range.get(0))) {
+            throw new MorelRuntimeException(BuiltInExn.SIZE, Pos.ZERO);
+          }
+          result.add(Bound.lowerBound(range).value);
+        } else {
+          final Bound lo = Bound.lowerBound(range);
+          final Bound hi = Bound.upperBound(range);
+          Bound.enumerate(discrete, lo, hi, result::add);
+        }
+      }
       return result.build();
     }
   }

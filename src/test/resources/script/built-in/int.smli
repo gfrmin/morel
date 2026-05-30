@@ -1,0 +1,224 @@
+(*
+ * Licensed to Julian Hyde under one or more contributor license
+ * agreements.  See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Julian Hyde licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License.  You may obtain a
+ * copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+ * either express or implied.  See the License for the specific
+ * language governing permissions and limitations under the
+ * License.
+ *
+ * Unit tests for the built-in `Int` structure, defined
+ * by the Standard ML Basis Library.
+ *)
+Sys.set ("lineWidth", 78);
+> val it = () : unit
+Sys.set ("printLength", 999);
+> val it = () : unit
+Sys.set ("stringDepth", ~1);
+> val it = () : unit
+
+Int;
+> val it =
+>   {abs=fn,compare=fn,div=fn,fmt=fn,fromInt=fn,fromLarge=fn,fromString=fn,
+>    max=fn,maxInt=SOME 2147483647,min=fn,minInt=SOME ~2147483648,mod=fn,
+>    precision=SOME 32,quot=fn,rem=fn,sameSign=fn,sign=fn,toInt=fn,toLarge=fn,
+>    toString=fn}
+>   : {abs:int -> int, compare:int * int -> order, div:int * int -> int,
+>      fmt:radix -> int -> string, fromInt:int -> int, fromLarge:int -> int,
+>      fromString:string -> int option, max:int * int -> int, maxInt:int option,
+>      min:int * int -> int, minInt:int option, mod:int * int -> int,
+>      precision:int option, quot:int * int -> int, rem:int * int -> int,
+>      sameSign:int * int -> bool, sign:int -> int, toInt:int -> int,
+>      toLarge:int -> int, toString:int -> string}
+
+Int.abs;
+> val it = fn : int -> int
+Int.abs 5;
+> val it = 5 : int
+5.abs ();
+> val it = 5 : int
+Int.abs ~3;
+> val it = 3 : int
+(~3).abs ();
+> val it = 3 : int
+Int.abs (valOf Int.minInt);
+> uncaught exception Overflow
+>   raised at: stdIn:1.1-1.26
+Int.compare;
+> val it = fn : int * int -> order
+Int.compare (4, 3);
+> val it = GREATER : order
+4.compare 3;
+> val it = GREATER : order
+Int.`div`;
+> val it = fn : int * int -> int
+Int.`div` (14, 3);
+> val it = 4 : int
+Int.`div` (~14, 3);
+> val it = ~5 : int
+Int.`div` (14, ~3);
+> val it = ~5 : int
+Int.`div` (~14, ~3);
+> val it = 4 : int
+Int.`div` (0, ~3);
+> val it = 0 : int
+Int.fromInt;
+> val it = fn : int -> int
+Int.fromInt 3;
+> val it = 3 : int
+Int.fmt;
+> val it = fn : radix -> int -> string
+Int.fmt DEC 42;
+> val it = "42" : string
+Int.fmt BIN 10;
+> val it = "1010" : string
+Int.fmt OCT 255;
+> val it = "377" : string
+Int.fmt HEX 255;
+> val it = "FF" : string
+Int.fmt HEX ~255;
+> val it = "~FF" : string
+Int.fmt DEC 0;
+> val it = "0" : string
+Int.fromLarge;
+> val it = fn : int -> int
+Int.fromLarge 3;
+> val it = 3 : int
+Int.fromString;
+> val it = fn : string -> int option
+Int.fromString "~345";
+> val it = SOME ~345 : int option
+Int.max;
+> val it = fn : int * int -> int
+Int.max (4, 3);
+> val it = 4 : int
+4.max 3;
+> val it = 4 : int
+Int.maxInt;
+> val it = SOME 2147483647 : int option
+Int.min;
+> val it = fn : int * int -> int
+Int.min (4, 3);
+> val it = 3 : int
+4.min 3;
+> val it = 3 : int
+Int.`mod`;
+> val it = fn : int * int -> int
+Int.`mod` (14, 3);
+> val it = 2 : int
+Int.`mod` (~14, 3);
+> val it = 1 : int
+Int.`mod` (14, ~3);
+> val it = ~1 : int
+Int.`mod` (~14, ~3);
+> val it = ~2 : int
+Int.`mod` (0, ~3);
+> val it = 0 : int
+Int.quot;
+> val it = fn : int * int -> int
+Int.quot (14, 3);
+> val it = 4 : int
+Int.quot (~14, 3);
+> val it = ~4 : int
+Int.quot (14, ~3);
+> val it = ~4 : int
+Int.quot (~14, ~3);
+> val it = 4 : int
+Int.quot (0, ~3);
+> val it = 0 : int
+Int.precision;
+> val it = SOME 32 : int option
+Int.rem;
+> val it = fn : int * int -> int
+Int.rem (14, 3);
+> val it = 2 : int
+Int.rem (~14, 3);
+> val it = ~2 : int
+Int.rem (14, ~3);
+> val it = 2 : int
+Int.rem (~14, ~3);
+> val it = ~2 : int
+Int.rem (0, ~3);
+> val it = 0 : int
+Int.sameSign;
+> val it = fn : int * int -> bool
+Int.sameSign (3, ~2);
+> val it = false : bool
+Int.sameSign (0, ~2);
+> val it = false : bool
+Int.sameSign (2, 345);
+> val it = true : bool
+Int.sameSign (0, 0);
+> val it = true : bool
+Int.sign;
+> val it = fn : int -> int
+Int.sign ~3;
+> val it = ~1 : int
+(~3).sign ();
+> val it = ~1 : int
+Int.toInt;
+> val it = fn : int -> int
+Int.toInt 3;
+> val it = 3 : int
+Int.toLarge;
+> val it = fn : int -> int
+Int.toLarge 3;
+> val it = 3 : int
+Int.toString;
+> val it = fn : int -> string
+Int.toString ~345;
+> val it = "~345" : string
+(~345).toString ();
+> val it = "~345" : string
+
+(* Side-by-side comparison of how each Int.fmt radix renders a range of
+ * values. To run in SML, prepend `open StringCvt;` (Morel exposes the
+ * radix constructors at the top level). `Sys.set` is Morel-only; SML
+ * users will see the record list in classic notation. *)
+Sys.set ("output", "tabular");
+> val it = () : unit
+List.map (fn (Name, X) =>
+             {Name = Name,
+              X = X,
+              dec = Int.fmt DEC X,
+              hex = Int.fmt HEX X,
+              oct = Int.fmt OCT X,
+              bin = Int.fmt BIN X,
+              toString = Int.toString X})
+  [("0", 0),
+   ("1", 1),
+   ("~1", ~1),
+   ("42", 42),
+   ("~42", ~42),
+   ("255", 255),
+   ("~255", ~255),
+   ("1024", 1024),
+   ("Int.maxInt", valOf Int.maxInt),
+   ("Int.minInt", valOf Int.minInt)];
+> Name       X           bin                               dec         hex       oct          toString
+> ---------- ----------- --------------------------------- ----------- --------- ------------ -----------
+> 0                    0 0                                 0           0         0            0
+> 1                    1 1                                 1           1         1            1
+> ~1                  -1 ~1                                ~1          ~1        ~1           ~1
+> 42                  42 101010                            42          2A        52           42
+> ~42                -42 ~101010                           ~42         ~2A       ~52          ~42
+> 255                255 11111111                          255         FF        377          255
+> ~255              -255 ~11111111                         ~255        ~FF       ~377         ~255
+> 1024              1024 10000000000                       1024        400       2000         1024
+> Int.maxInt  2147483647 1111111111111111111111111111111   2147483647  7FFFFFFF  17777777777  2147483647
+> Int.minInt -2147483648 ~10000000000000000000000000000000 ~2147483648 ~80000000 ~20000000000 ~2147483648
+>
+> val it : {Name:string, X:int, bin:string, dec:string, hex:string, oct:string, toString:string} list
+Sys.unset "output";
+> val it = () : unit
+
+(*) End int.smli

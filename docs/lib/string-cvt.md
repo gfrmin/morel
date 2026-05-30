@@ -34,12 +34,14 @@ specifiers and reader types.
 
 <pre>
 datatype <a id='radix' href="#radix-impl">radix</a> = BIN | OCT | DEC | HEX
-type ('a, 'b) <a id='reader' href="#reader-impl">reader</a> = 'b -> ('a * 'b) option
 datatype <a id='realfmt' href="#realfmt-impl">realfmt</a>
   = SCI of int option
   | FIX of int option
   | GEN of int option
   | EXACT
+
+val <a id='padLeft' href="#padLeft-impl">padLeft</a> : char -> int -> string -> string
+val <a id='padRight' href="#padRight-impl">padRight</a> : char -> int -> string -> string
 </pre>
 
 <a id="radix-impl"></a>
@@ -48,16 +50,23 @@ datatype <a id='realfmt' href="#realfmt-impl">realfmt</a>
 specifies the numeric base: binary (2), octal (8), decimal (10), or
 hexadecimal (16).
 
-<a id="reader-impl"></a>
-<h3><code><strong>type</strong> ('a, 'b) reader</code></h3>
-
-is the type of a scanning function that reads one value of type `'a`
-from a stream of type `'b`, returning the value and the remaining
-stream, or `NONE` at end of input.
-
 <a id="realfmt-impl"></a>
 <h3><code><strong>datatype</strong> realfmt</code></h3>
 
 specifies the format for converting real numbers to strings.
+
+<a id="padLeft-impl"></a>
+<h3><code>padLeft</code></h3>
+
+`padLeft c i s` `padLeft c i s` returns `s` padded on the left with `c` characters so
+that the result has length at least `i`. If `s` is already at least
+`i` characters long, it is returned unchanged.
+
+<a id="padRight-impl"></a>
+<h3><code>padRight</code></h3>
+
+`padRight c i s` `padRight c i s` returns `s` padded on the right with `c` characters
+so that the result has length at least `i`. If `s` is already at
+least `i` characters long, it is returned unchanged.
 
 [//]: # (end:lib/string-cvt)
