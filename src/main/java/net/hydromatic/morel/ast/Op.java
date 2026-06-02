@@ -178,6 +178,7 @@ public enum Op {
   UNION(" union "),
   YIELD,
   YIELD_MANY,
+  YIELD_ALL,
   INTO,
   THROUGH,
   AGGREGATE,

@@ -319,6 +319,10 @@ public class Visitor {
     yieldMany.exp.accept(this);
   }
 
+  protected void visit(Ast.YieldAll yieldAll) {
+    yieldAll.exp.accept(this);
+  }
+
   protected void visit(Ast.Into into) {
     into.exp.accept(this);
   }

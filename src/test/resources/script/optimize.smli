@@ -406,7 +406,7 @@ Sys.planEx "1";
  *)
 
 (* For abs, FBBT recognizes `abs x OP c` for the connected-interval
- * cases and * emits the equivalent two-sided bounds. *)
+ * cases and emits the equivalent two-sided bounds. *)
 from x where abs x < 5;
 > val it = [~4,~3,~2,~1,0,1,2,3,4] : int bag
 Sys.planEx "3";
