@@ -751,10 +751,6 @@ public enum AstBuilder {
     return new Ast.Yield(pos, exp);
   }
 
-  public Ast.FromStep yieldMany(Pos pos, Ast.Exp exp) {
-    return new Ast.YieldMany(pos, exp);
-  }
-
   public Ast.FromStep yieldAll(Pos pos, Ast.Exp exp) {
     return new Ast.YieldAll(pos, exp);
   }

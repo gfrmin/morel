@@ -1088,18 +1088,6 @@ public class TypeResolver {
       case YIELD:
         return deduceYieldStepType((Ast.Yield) step, p, fieldVars, steps);
 
-      case YIELD_MANY:
-        {
-          final Ast.YieldMany ym = (Ast.YieldMany) step;
-          final Variable elemVar = unifier.variable();
-          final Ast.Exp ymExp =
-              deduceExpType(p.env, ym.exp, toVariable(listTerm(elemVar)));
-          steps.add(ym.copy(ymExp));
-          final Variable c = unifier.variable();
-          isListOrBagMatchingInput(c, elemVar, requireNonNull(p.c), p.v);
-          return Triple.of(p.rootEnv, p.env, elemVar, c);
-        }
-
       case YIELD_ALL:
         return deduceYieldAllStepType((Ast.YieldAll) step, p, fieldVars, steps);
 

@@ -420,10 +420,6 @@ public class Shuttle {
     return ast.yield(yield.pos, yield.exp.accept(this));
   }
 
-  protected AstNode visit(Ast.YieldMany yieldMany) {
-    return ast.yieldMany(yieldMany.pos, yieldMany.exp.accept(this));
-  }
-
   protected AstNode visit(Ast.YieldAll yieldAll) {
     return ast.yieldAll(yieldAll.pos, yieldAll.exp.accept(this));
   }
@@ -661,10 +657,6 @@ public class Shuttle {
 
   protected Core.Yield visit(Core.Yield yield) {
     return yield.copy(yield.env, yield.exp.accept(this));
-  }
-
-  protected Core.YieldMany visit(Core.YieldMany yieldMany) {
-    return yieldMany.copy(yieldMany.env, yieldMany.exp.accept(this));
   }
 
   protected Core.Unorder visit(Core.Unorder unorder) {

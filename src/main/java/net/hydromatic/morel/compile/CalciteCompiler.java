@@ -537,8 +537,6 @@ public class CalciteCompiler extends Compiler {
             return where(cx, (Core.Where) fromStep);
           case YIELD:
             return yield_(cx, (Core.Yield) fromStep);
-          case YIELD_MANY:
-            return null; // TODO: SQL compilation
           default:
             throw new AssertionError(fromStep);
         }

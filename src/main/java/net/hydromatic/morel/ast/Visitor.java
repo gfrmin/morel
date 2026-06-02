@@ -315,10 +315,6 @@ public class Visitor {
     yield.exp.accept(this);
   }
 
-  protected void visit(Ast.YieldMany yieldMany) {
-    yieldMany.exp.accept(this);
-  }
-
   protected void visit(Ast.YieldAll yieldAll) {
     yieldAll.exp.accept(this);
   }
@@ -508,10 +504,6 @@ public class Visitor {
 
   protected void visit(Core.Yield yield) {
     yield.exp.accept(this);
-  }
-
-  protected void visit(Core.YieldMany yieldMany) {
-    yieldMany.exp.accept(this);
   }
 
   protected void visit(Core.Unorder unorder) {}
