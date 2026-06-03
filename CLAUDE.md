@@ -31,6 +31,78 @@ implemented in Java. It allows users to write Standard ML code with
 SQL-like query expressions to operate on in-memory data structures.
 The project uses Apache Calcite for query optimization and planning.
 
+## Fork context (read first)
+
+This repository is a fork of `hydromatic/morel`. `origin` is
+`github.com/gfrmin/morel`; `upstream` is `github.com/hydromatic/morel`.
+
+- **Branches:** `main` mirrors `upstream/main`. The long-lived `clickhouse`
+  branch is the daily-driver dev branch and the default branch to work on.
+- **Purpose:** use Morel as a rigorous, typed, relational-algebra front end to
+  replace dbt/SQL for transformation over ClickHouse. North star: the *compiler*
+  chooses materialization (no `materialized=` hints), with DBSP-style incremental
+  view maintenance compiled to ClickHouse-native objects.
+
+**STANDING DIRECTIVE (do not violate without explicit instruction):** only keep
+`clickhouse` aligned with upstream. Anything *new* (the fork features below, or
+further ideas) is discussed with the maintainer (Julian Hyde) **before**
+upstreaming — do **not** open upstream PRs unilaterally. When realigning, prefer
+merge (preserve the daily-driver history); `./mvnw install` must be green before
+any push; get explicit confirmation before pushing.
+
+### Fork-only features (not in upstream), with entry points
+
+- **SQL generation:** `Calcite.toSql(RelNode, SqlDialect)`, `--dialect=clickhouse`,
+  routed through the HYBRID compile path (`Shell.runToSql`, `Ml.assertSql`,
+  `Calcite.extractRelNode`). Commits `5a25f91`, `2d38f05`.
+- **Nested-record field-name fix** in `CalciteCompiler.translate` for TUPLE
+  (use `tuple.type().argNames()`, not ordinal "0"/"1"). Manifests **only** in
+  generated SQL text — plain Calcite execution resolves fields by ordinal.
+  Commits `c93e132`, `fd0fa33`.
+- **`--jdbc`** + JDBC schema discovery + `CLICKHOUSE_*` env credentials
+  (`Calcite.withJdbc`, `JdbcCalcite`). Commits `f15b6d0`, `c65442a`, `dc4a3e8`.
+- **`--materialize`** (`CREATE TABLE AS` over the JDBC source). Commit `dc4a3e8`.
+- **File input** (`--file` / `.sml` in dialect mode). Commit `4c024f7`.
+  Known limit: intermediate `val` bindings over JDBC tables can't be referenced
+  by the final SQL-generating expression (RelList binding field-name resolution).
+- **DBSP → ClickHouse native objects** (`--jdbc … --output …`): incremental MVs +
+  `AggregatingMergeTree`/`MergeTree` targets. Commit `b2fd2df`. Early prototype.
+- **Relational aggregates** `argMax`/`argMin`, `maxBy`/`minBy`. Commits
+  `96c41fb`, `8714418`. Toward whole-row dedup — but the principled design is
+  post-`group` `order`+`take` ⇒ `ROW_NUMBER() OVER (…)`, aligned with upstream
+  #280/#290; settle that with Hyde before extending these.
+
+### Known Morel limitations / upstream issues to raise (verified 2026-06-03)
+
+- **#175** (open) — flex-record inference: `fun f items = from i in items where
+  i.units = 1` fails with `unresolved flex record` (`TypeResolver.java:291,785`).
+  Blocks reusable typed transformations over records. Kin to **#375**.
+- **Calcite interpreter wrong answers** on multi-operand `except`/set-ops —
+  correctness bug, documented by disabled tests at `AlgebraTest.java:251–258`.
+  NEW / unfiled.
+- **#299** (open) — declaring a function whose arg could be `list` or `bag`
+  throws `UnsupportedOperationException`. Relevant to `elem`/`notelem` overloads.
+- **#357** (open) — position-less type errors (`Cannot deduce type: no valid
+  overloads` at `0.0-0.0`).
+- **`morel` launcher bug** — `FILES="$FILES $1"` (lines ~133/137) accrues a
+  leading space; quoted at 203/230 but **unquoted at 210**, so two `.smli` args
+  collapse to one. NEW / unfiled. Fix with a bash array.
+- **`.smli` ScriptTest fragility** — the harness eats the first character of a
+  statement not preceded by a blank line (`from` → `rom`). Always leave a blank
+  line between top-level statements.
+
+### Fork conventions
+
+- **Build gate:** `./mvnw install` is the real pre-commit gate — the `fullMake`
+  command referenced later in this file does **not** exist on this machine. Read
+  pass/fail from a log file, not inline stdout.
+- **Never** verify with `./morel <path>` (the wrapper mangles a path argument);
+  use the ScriptTest harness — it is the only ground truth.
+- `.smli` editing: one blank line between every top-level statement; never
+  hand-write golden output (copy from
+  `target/test-classes/script/surefire/script/<f>.smli` after a failing run).
+- Morel commits on this fork omit the `Co-Authored-By` trailer.
+
 ## Build and Test Commands
 
 ### Building

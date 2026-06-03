@@ -30,6 +30,51 @@ Standard ML interpreter, with relational extensions, implemented in Java
 [GitHub/julianhyde](https://github.com/julianhyde/morel)
 until version 0.2.)
 
+## About this fork
+
+This is a fork of [hydromatic/morel](https://github.com/hydromatic/morel).
+The `main` branch mirrors upstream; day-to-day work lives on the long-lived
+`clickhouse` branch.
+
+**Why it exists.** I use Morel as a rigorous, typed, relational-algebra front
+end for data transformation over [ClickHouse](https://clickhouse.com/) — the
+work [dbt](https://www.getdbt.com/) does, but in a language where relations are
+first-class values, transformations compose as ordinary typed functions, and
+schemas are checked at compile time. The guiding conviction is that
+**materialization strategy belongs to the compiler, not the user**: the language
+should carry no `materialized='incremental'` knobs, only (at most) lightweight
+annotations about the *temporal semantics* of sources. The north star is
+incremental view maintenance in the [DBSP](https://www.feldera.com/) sense,
+compiled down to ClickHouse's native storage primitives (incremental
+materialized views, `*MergeTree` engines) rather than run in a separate dataflow
+runtime.
+
+**What the fork adds beyond upstream** (all on `clickhouse`):
+
+* **SQL generation** — lower a Morel `from` to a Calcite `RelNode` and then to
+  SQL text via `RelToSqlConverter` (`Calcite.toSql`), with ClickHouse-dialect
+  output. CLI: `--dialect=clickhouse`.
+* **`--jdbc`** — read table schemas from a live JDBC database and query its
+  tables as foreign sources; credentials from `CLICKHOUSE_*` env vars.
+* **`--materialize`** — wrap generated SQL in `CREATE TABLE AS` and execute it
+  over the JDBC connection.
+* **File input** — process `.sml` scripts in `--dialect` mode, building up `val`
+  bindings before the final expression is rendered to SQL.
+* **DBSP → ClickHouse native objects** — an experimental prototype that compiles
+  incremental `from` pipelines into ClickHouse materialized views and
+  collapsing/aggregating `MergeTree` tables, so new inserts are processed
+  incrementally. (`--jdbc … --output …`.)
+* **Relational aggregates** — `argMax`/`argMin` and `maxBy`/`minBy`, toward
+  whole-row deduplication (see the window-function direction below).
+
+**Relationship to upstream.** The fork stays aligned with upstream `main`.
+Anything genuinely new is contributed back as a focused pull request and
+**discussed with the maintainer (Julian Hyde) before upstreaming**, to avoid
+overlapping work already in flight (notably the core-operator and
+deduplication/`order` design). Contributors and agents: see
+[CLAUDE.md](CLAUDE.md) for the fork's working conventions and standing
+directives.
+
 ## Requirements
 
 Java version 17 or higher.
