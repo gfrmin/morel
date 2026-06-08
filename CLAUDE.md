@@ -67,29 +67,49 @@ any push; get explicit confirmation before pushing.
   by the final SQL-generating expression (RelList binding field-name resolution).
 - **DBSP → ClickHouse native objects** (`--jdbc … --output …`): incremental MVs +
   `AggregatingMergeTree`/`MergeTree` targets. Commit `b2fd2df`. Early prototype.
-- **Relational aggregates** `argMax`/`argMin`, `maxBy`/`minBy`. Commits
-  `96c41fb`, `8714418`. Toward whole-row dedup — but the principled design is
-  post-`group` `order`+`take` ⇒ `ROW_NUMBER() OVER (…)`, aligned with upstream
-  #280/#290; settle that with Hyde before extending these.
+- **Relational aggregates** `argMax`/`argMin` (`96c41fb`, fork-only, **abandoned** —
+  per-column reduction yields chimera rows), `maxBy`/`minBy` (`8714418`, whole-row
+  dedup). Hyde **upstreamed `maxBy`/`minBy` in #390** (2026-06-07), citing `8714418`
+  by hash. The principled design is post-`group` `order`+`take` ⇒ `ROW_NUMBER() OVER
+  (…)` (the n=1 case = `maxBy`/`minBy`), aligned with #280/#290; whether ROW_NUMBER is
+  even the right model vs. Measures (Discussion **#344**) is the open question — settle
+  with Hyde on #390 / #344 before extending.
 
 ### Known Morel limitations / upstream issues to raise (verified 2026-06-03)
 
-- **#175** (open) — flex-record inference: `fun f items = from i in items where
-  i.units = 1` fails with `unresolved flex record` (`TypeResolver.java:291,785`).
-  Blocks reusable typed transformations over records. Kin to **#375**.
-- **Calcite interpreter wrong answers** on multi-operand `except`/set-ops —
-  correctness bug, documented by disabled tests at `AlgebraTest.java:251–258`.
-  NEW / unfiled.
+- **#139** (open, *Type deduction for records*) — function-parameter flex-record
+  inference: `fun singleUnitItems items = from i in items where i.units = 1` fails
+  with `unresolved flex record (can't tell what fields there are besides #units)`
+  (`TypeResolver.java:290–296` applied-selector path; `:783–788` bare-selector).
+  Hyde's own canonical repro is `fun hasJob e job = e.job = job` (ClassCastException).
+  Blocks reusable typed transformations over records; engage *on #139*. Kin to
+  **#375**. (Was tracked here as #175, which closed 2026-06-06 — that issue was only
+  the misleading *message* for a typo'd field name, not parameter inference.)
+- **Calcite interpreter wrong answers** on set-ops — correctness bug. NEW / unfiled.
+  Disabled tests at `AlgebraTest.java:252–259`. Narrower than "all multi-operand":
+  multi-operand `union` (line 248) and *literal* multi-operand `intersect` (line 250)
+  are enabled and correct; only **chained `except`** and **any set-op whose operand
+  is a subquery** diverge. Native (HYBRID=false) is correct; Calcite (HYBRID=true)
+  is wrong. E.g. `from i in [1,2,3] except [2,5,4], [2,1,6]` ⇒ native `[3]`, Calcite ≠.
 - **#299** (open) — declaring a function whose arg could be `list` or `bag`
   throws `UnsupportedOperationException`. Relevant to `elem`/`notelem` overloads.
 - **#357** (open) — position-less type errors (`Cannot deduce type: no valid
   overloads` at `0.0-0.0`).
-- **`morel` launcher bug** — `FILES="$FILES $1"` (lines ~133/137) accrues a
-  leading space; quoted at 203/230 but **unquoted at 210**, so two `.smli` args
-  collapse to one. NEW / unfiled. Fix with a bash array.
-- **`.smli` ScriptTest fragility** — the harness eats the first character of a
-  statement not preceded by a blank line (`from` → `rom`). Always leave a blank
-  line between top-level statements.
+- **`morel` launcher bug** — `FILES="$FILES $1"` (lines 133/137) accrues a leading
+  space, then expands inconsistently: quoted `"$FILES"` at 203/230, unquoted `$FILES`
+  at 210. Two `.smli` args collapse because a `*.smli` arg flips `SUBCMD` execute→smli
+  (130–132), routing them to the **quoted `"$FILES"` at line 203** (one token, leading
+  space) — *not* the unquoted line 210, which actually word-splits correctly (it only
+  breaks on names with spaces/globs). NEW / unfiled. Fix with a bash array
+  (`FILES=()` / `FILES+=("$1")` / `"${FILES[@]}"`) at all three sites.
+- **`.smli` ScriptTest** — the old `from`→`rom` first-character claim is **STALE**:
+  not reproducible on `clickhouse` after the harness rewrite in `9430af3` (#334);
+  verified across 7 scenarios, first char preserved (`Main.java:533–535` strips only a
+  leading `\n`, never a letter). Keep one blank line between top-level statements as
+  defensive style, but do **not** file a character-eating bug. Real residual artifacts
+  (minor): regenerated `.out` gains a spurious trailing blank line, and a statement
+  with no pre-existing `>` output line regenerates no output (`command()` emits only
+  when `expectedOutput != null`, `Main.java:720–766`).
 
 ### Fork conventions
 
