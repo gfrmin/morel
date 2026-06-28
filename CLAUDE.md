@@ -94,17 +94,31 @@ any push; get explicit confirmation before pushing.
   records; engage *on #139*. Kin to **#375**. (Was tracked here as #175, which
   closed 2026-06-06 — that issue was only the misleading *message* for a typo'd
   field name, not parameter inference.)
-- **Calcite interpreter wrong answers** on set-ops — correctness bug. Upstream
-  `194ab19` (landed in the 2026-06-28 realign) fixed the *native* set-op
+- **Calcite interpreter wrong answers** on set-ops (#391) — root-caused
+  2026-06-28. Upstream `194ab19` (realign) fixed only the *native* set-op
   **crashes** (`distinct except` AIOOBE; record column-order ClassCastException)
-  via a `RowHandoff` adapter; the **Calcite (HYBRID=true) wrong-answer
-  divergence** is a separate, still-open bug and needs re-verification after the
-  merge. Disabled tests live in `AlgebraTest` (line numbers shifted by the
-  merge — re-locate before citing). Narrower than "all multi-operand":
-  multi-operand `union` and *literal* multi-operand `intersect` are correct;
-  only **chained `except`** and **any set-op whose operand is a subquery**
-  diverge. Native (HYBRID=false) is correct; Calcite (HYBRID=true) is wrong.
-  E.g. `from i in [1,2,3] except [2,5,4], [2,1,6]` ⇒ native `[3]`, Calcite ≠.
+  via a `RowHandoff` adapter. The HYBRID=true wrong answers decompose into **two
+  independent bugs** (Morel's Calcite *plans* are correct in both cases — the
+  fault is downstream in execution):
+  - **Bug A — set-op whose operand is a JDBC/subquery (not a literal):**
+    **FIXED** in `CalciteCompiler.setStep` by adding
+    `harmonizeRowTypes(cx.relBuilder, n)` before the `minus`/`intersect`/`union`
+    call (the operator-application path already did this; the from-step path did
+    not). Without it the `Values` operand and the `JdbcTableScan` operand have
+    different row types, so Calcite's interpreter `SetOpNode.run()`
+    `HashSet<Row>` membership never matches — `except` became a no-op,
+    `intersect` returned `[]`. `union` was unaffected (it emits without
+    comparing rows). The two formerly-disabled JDBC-operand cases in
+    `AlgebraTest.testQueryList` are now re-enabled and pass.
+  - **Bug B — chained `except` / 3+-operand `intersect`:** still open,
+    **Calcite-side**. `org.apache.calcite.interpreter.SetOpNode` reads only
+    `source(rel,0)` and `source(rel,1)`, so operands ≥3 of a multi-input
+    `Minus`/`Intersect` are silently dropped. `union` is immune (multi-input
+    union goes through a different interpreter path). Workaround would be to
+    binarize minus/intersect in `setStep` (nested 2-input nodes) or fix Calcite.
+    Repro kept disabled in `testQueryList`:
+    `from i in [1,2,3] except [2,5,4], [2,1,6]` ⇒ native `[3]`, Calcite `[1,3]`.
+  Native (HYBRID=false) is correct throughout.
 - **#299** (open) — declaring a function whose arg could be `list` or `bag`
   throws `UnsupportedOperationException`. Relevant to `elem`/`notelem`
   overloads.

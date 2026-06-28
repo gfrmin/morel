@@ -876,6 +876,7 @@ public class CalciteCompiler extends Compiler {
       }
       ++n;
     }
+    harmonizeRowTypes(cx.relBuilder, n);
     switch (setStep.op) {
       case EXCEPT:
         cx.relBuilder.minus(!setStep.distinct, n);
