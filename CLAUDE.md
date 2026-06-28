@@ -39,9 +39,10 @@ This repository is a fork of `hydromatic/morel`. `origin` is
 - **Branches:** `main` mirrors `upstream/main`. The long-lived `clickhouse`
   branch is the daily-driver dev branch and the default branch to work on.
 - **Purpose:** use Morel as a rigorous, typed, relational-algebra front end to
-  replace dbt/SQL for transformation over ClickHouse. North star: the *compiler*
-  chooses materialization (no `materialized=` hints), with DBSP-style incremental
-  view maintenance compiled to ClickHouse-native objects.
+  replace dbt/SQL for transformation over ClickHouse. North star: the
+  *compiler* chooses materialization (no `materialized=` hints), with
+  DBSP-style incremental view maintenance compiled to ClickHouse-native
+  objects.
 
 **STANDING DIRECTIVE (do not violate without explicit instruction):** only keep
 `clickhouse` aligned with upstream. Anything *new* (the fork features below, or
@@ -52,64 +53,79 @@ any push; get explicit confirmation before pushing.
 
 ### Fork-only features (not in upstream), with entry points
 
-- **SQL generation:** `Calcite.toSql(RelNode, SqlDialect)`, `--dialect=clickhouse`,
-  routed through the HYBRID compile path (`Shell.runToSql`, `Ml.assertSql`,
-  `Calcite.extractRelNode`). Commits `5a25f91`, `2d38f05`.
+- **SQL generation:** `Calcite.toSql(RelNode, SqlDialect)`,
+  `--dialect=clickhouse`, routed through the HYBRID compile path
+  (`Shell.runToSql`, `Ml.assertSql`, `Calcite.extractRelNode`). Commits
+  `5a25f91`, `2d38f05`.
 - **Nested-record field-name fix** in `CalciteCompiler.translate` for TUPLE
   (use `tuple.type().argNames()`, not ordinal "0"/"1"). Manifests **only** in
   generated SQL text — plain Calcite execution resolves fields by ordinal.
   Commits `c93e132`, `fd0fa33`.
 - **`--jdbc`** + JDBC schema discovery + `CLICKHOUSE_*` env credentials
   (`Calcite.withJdbc`, `JdbcCalcite`). Commits `f15b6d0`, `c65442a`, `dc4a3e8`.
-- **`--materialize`** (`CREATE TABLE AS` over the JDBC source). Commit `dc4a3e8`.
+- **`--materialize`** (`CREATE TABLE AS` over the JDBC source). Commit
+  `dc4a3e8`.
 - **File input** (`--file` / `.sml` in dialect mode). Commit `4c024f7`.
   Known limit: intermediate `val` bindings over JDBC tables can't be referenced
-  by the final SQL-generating expression (RelList binding field-name resolution).
-- **DBSP → ClickHouse native objects** (`--jdbc … --output …`): incremental MVs +
-  `AggregatingMergeTree`/`MergeTree` targets. Commit `b2fd2df`. Early prototype.
-- **Relational aggregates** `argMax`/`argMin` (`96c41fb`, fork-only, **abandoned** —
-  per-column reduction yields chimera rows), `maxBy`/`minBy` (`8714418`, whole-row
-  dedup). Hyde **upstreamed `maxBy`/`minBy` in #390** (2026-06-07), citing `8714418`
-  by hash. The principled design is post-`group` `order`+`take` ⇒ `ROW_NUMBER() OVER
-  (…)` (the n=1 case = `maxBy`/`minBy`), aligned with #280/#290; whether ROW_NUMBER is
-  even the right model vs. Measures (Discussion **#344**) is the open question — settle
-  with Hyde on #390 / #344 before extending.
+  by the final SQL-generating expression (RelList binding field-name
+  resolution).
+- **DBSP → ClickHouse native objects** (`--jdbc … --output …`): incremental MVs
+  + `AggregatingMergeTree`/`MergeTree` targets. Commit `b2fd2df`. Early
+  prototype.
+- **Relational aggregates** `argMax`/`argMin` (`96c41fb`, fork-only,
+  **abandoned** — per-column reduction yields chimera rows), `maxBy`/`minBy`
+  (`8714418`, whole-row dedup). Hyde **upstreamed `maxBy`/`minBy` in #390**
+  (2026-06-07), citing `8714418` by hash, but it is **not yet in
+  `upstream/main`**; the fork still carries all four (re-applied during the
+  2026-06-28 realign, now top-level-aliased via `BuiltIn.forEachAlias`). The
+  principled design is post-`group` `order`+`take` ⇒ `ROW_NUMBER() OVER (…)`
+  (the n=1 case = `maxBy`/`minBy`), aligned with #280/#290; whether ROW_NUMBER
+  is even the right model vs. Measures (Discussion **#344**) is the open
+  question — settle with Hyde on #390 / #344 before extending.
 
 ### Known Morel limitations / upstream issues to raise (verified 2026-06-03)
 
-- **#139** (open, *Type deduction for records*) — function-parameter flex-record
-  inference: `fun singleUnitItems items = from i in items where i.units = 1` fails
-  with `unresolved flex record (can't tell what fields there are besides #units)`
-  (`TypeResolver.java:290–296` applied-selector path; `:783–788` bare-selector).
-  Hyde's own canonical repro is `fun hasJob e job = e.job = job` (ClassCastException).
-  Blocks reusable typed transformations over records; engage *on #139*. Kin to
-  **#375**. (Was tracked here as #175, which closed 2026-06-06 — that issue was only
-  the misleading *message* for a typo'd field name, not parameter inference.)
-- **Calcite interpreter wrong answers** on set-ops — correctness bug. NEW / unfiled.
-  Disabled tests at `AlgebraTest.java:252–259`. Narrower than "all multi-operand":
-  multi-operand `union` (line 248) and *literal* multi-operand `intersect` (line 250)
-  are enabled and correct; only **chained `except`** and **any set-op whose operand
-  is a subquery** diverge. Native (HYBRID=false) is correct; Calcite (HYBRID=true)
-  is wrong. E.g. `from i in [1,2,3] except [2,5,4], [2,1,6]` ⇒ native `[3]`, Calcite ≠.
+- **#139** (open, *Type deduction for records*) — function-parameter
+  flex-record inference: `fun singleUnitItems items = from i in items where
+  i.units = 1` fails with `unresolved flex record (can't tell what fields there
+  are besides #units)` (`TypeResolver.java:290–296` applied-selector path;
+  `:783–788` bare-selector). Hyde's own canonical repro is `fun hasJob e job =
+  e.job = job` (ClassCastException). Blocks reusable typed transformations over
+  records; engage *on #139*. Kin to **#375**. (Was tracked here as #175, which
+  closed 2026-06-06 — that issue was only the misleading *message* for a typo'd
+  field name, not parameter inference.)
+- **Calcite interpreter wrong answers** on set-ops — correctness bug. Upstream
+  `194ab19` (landed in the 2026-06-28 realign) fixed the *native* set-op
+  **crashes** (`distinct except` AIOOBE; record column-order ClassCastException)
+  via a `RowHandoff` adapter; the **Calcite (HYBRID=true) wrong-answer
+  divergence** is a separate, still-open bug and needs re-verification after the
+  merge. Disabled tests live in `AlgebraTest` (line numbers shifted by the
+  merge — re-locate before citing). Narrower than "all multi-operand":
+  multi-operand `union` and *literal* multi-operand `intersect` are correct;
+  only **chained `except`** and **any set-op whose operand is a subquery**
+  diverge. Native (HYBRID=false) is correct; Calcite (HYBRID=true) is wrong.
+  E.g. `from i in [1,2,3] except [2,5,4], [2,1,6]` ⇒ native `[3]`, Calcite ≠.
 - **#299** (open) — declaring a function whose arg could be `list` or `bag`
-  throws `UnsupportedOperationException`. Relevant to `elem`/`notelem` overloads.
+  throws `UnsupportedOperationException`. Relevant to `elem`/`notelem`
+  overloads.
 - **#357** (open) — position-less type errors (`Cannot deduce type: no valid
-  overloads` at `0.0-0.0`).
-- **`morel` launcher bug** — `FILES="$FILES $1"` (lines 133/137) accrues a leading
-  space, then expands inconsistently: quoted `"$FILES"` at 203/230, unquoted `$FILES`
-  at 210. Two `.smli` args collapse because a `*.smli` arg flips `SUBCMD` execute→smli
-  (130–132), routing them to the **quoted `"$FILES"` at line 203** (one token, leading
-  space) — *not* the unquoted line 210, which actually word-splits correctly (it only
-  breaks on names with spaces/globs). NEW / unfiled. Fix with a bash array
-  (`FILES=()` / `FILES+=("$1")` / `"${FILES[@]}"`) at all three sites.
-- **`.smli` ScriptTest** — the old `from`→`rom` first-character claim is **STALE**:
-  not reproducible on `clickhouse` after the harness rewrite in `9430af3` (#334);
-  verified across 7 scenarios, first char preserved (`Main.java:533–535` strips only a
-  leading `\n`, never a letter). Keep one blank line between top-level statements as
-  defensive style, but do **not** file a character-eating bug. Real residual artifacts
-  (minor): regenerated `.out` gains a spurious trailing blank line, and a statement
-  with no pre-existing `>` output line regenerates no output (`command()` emits only
-  when `expectedOutput != null`, `Main.java:720–766`).
+  overloads` at `0.0-0.0`). Partially addressed upstream by **#380** (more type
+  errors now carry a source position; landed in the 2026-06-28 realign) —
+  re-check residual coverage.
+- **`morel` launcher multi-file bug** — **FIXED upstream as #392** (`024d249`,
+  authored by this fork, merged in the 2026-06-28 realign). File arguments now
+  use a bash array (`FILES=()` / `FILES+=("$1")` / `"${FILES[@]}"`) instead of
+  the old space-joined `FILES="$FILES $1"` that collapsed two `.smli` args. No
+  longer an open issue.
+- **`.smli` ScriptTest** — the old `from`→`rom` first-character claim is
+  **STALE**: not reproducible on `clickhouse` after the harness rewrite in
+  `9430af3` (#334); verified across 7 scenarios, first char preserved
+  (`Main.java` strips only a leading `\n`, never a letter). Keep one blank line
+  between top-level statements as defensive style, but do **not** file a
+  character-eating bug. Real residual artifacts (minor): regenerated `.out`
+  gains a spurious trailing blank line, and a statement with no pre-existing `>`
+  output line regenerates no output (`command()` emits only when
+  `expectedOutput != null`).
 
 ### Fork conventions
 
@@ -365,6 +381,59 @@ Notes:
 - For opaque eqtypes (like `time`) backed by non-List Java objects,
   `Pretty.java` handles printing via `!(value instanceof List)` in
   `prettyDataType`.
+- A `.sig` file is signature-driven for lint: as soon as `lib/{name}.sig`
+  exists, `LintTest` (`testSignatures`, `testStructureDocs`,
+  `testGeneratedSections`) requires the full `BuiltIn`/`Codes`
+  implementation, a `docs/lib/{name}.md` page, and the
+  `index.md`/`reference.md` rows. You cannot land the `.sig` on its own;
+  add it together with the implementation and docs.
+- `LintTest.testSignatures` emits the exact expected `BuiltIn` enum entries
+  (rendered from the `.sig`); copy them as a starting point. It matches by
+  `(structure, mlName, type)`, not by Java constant name, but the constant
+  names must still be alphabetically sorted and follow the `STRUCT_OP_PLUS`
+  convention for operator members.
+- Regenerate idempotent `.smli` expected output by putting a single `> x`
+  placeholder line after each command and running
+  `./morel --echo <abs-path>`; the generated `<file>.smli.out` holds the
+  authoritative output (a single placeholder expands to a multi-line result).
+  Copy it back over the source. Operator/reserved members are invoked with
+  backticks, e.g. `` Word.`<<` (a, b) ``.
+- Adding a structure adds one top-level binding, so regenerate the
+  environment-count tests in `built-in/sys.smli` and `misc.smli`.
+
+#### When the structure introduces a new primitive type with literals
+
+`Word` added a new `PrimitiveType` (`WORD`) with literal syntax (`0w255`,
+`0wx1f`). This is beyond the 6-step recipe above; it follows the
+"Adding a Language Feature" path and touches:
+
+- `type/PrimitiveType.java` — new enum constant (auto-registered by name via
+  `TypeSystem`'s `PrimitiveType.values()` loop). **Literals must be a
+  `PrimitiveType`, not an `Eqtype`** — the literal pipeline (Ast to Core to
+  Code) only carries `PrimitiveType` values. (The `.sig` still writes
+  `eqtype word`, as `int.sig` writes `eqtype int`.)
+- `ast/Op.java` — `X_LITERAL` and `X_LITERAL_PAT` ops, plus the `toPat()`
+  case.
+- `MorelParser.jj` — lexer token(s) and a production wired into `literal()`
+  (which feeds both expressions and patterns).
+- `ast/Ast.java` **and** `ast/Core.java` — add the new pat op to the
+  `LiteralPat` constructor `checkArgument` whitelists (easy to miss; the Core
+  one surfaces only at runtime as a swallowed compile error).
+- `ast/AstBuilder.java`, `ast/CoreBuilder.java` — `xLiteral` builders and the
+  `CoreBuilder.literal(PrimitiveType, ...)` switch case.
+- `compile/TypeResolver.java` (expr + pat + `getType`), `compile/Resolver.java`
+  (expr + pat), `compile/Compiler.java` (constant lowering).
+- `eval/Closure.java` — both literal-pattern matchers (`bindRecurse` and
+  `StackClosure.pushBindings`).
+- `compile/PatternCoverageChecker.java`, `compile/Generators.java` — the
+  literal-pat switches.
+- `compile/Pretty.java` — `prettyPrimitive` (sorted; `word` after `unit`).
+- `SignatureChecker.java` (test) — add the type name to the `str()` switch so
+  it renders as the bare constant (e.g. `WORD`), matching `BuiltIn`.
+
+Note the `LargeInt`-is-fixed-precision gotcha: `LargeInt.int` = the 32-bit
+`int`, so `Word.toLargeInt`/`toLargeIntX` raise `Overflow` for values that
+don't fit in `int` and cannot honor the spec's "never raises" for `toLargeIntX`.
 
 ### Adding a Language Feature
 

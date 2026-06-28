@@ -253,8 +253,8 @@ testRoundTrip (INT 42);
 > val it = true : bool
 testRoundTrip (INT ~5);
 > val it = true : bool
-(*) REAL comparisons - note: real is not an equality type in Standard ML
-(*) so we can't directly compare REAL values; skip these tests
+(* REAL comparisons - note: real is not an equality type in Standard ML
+ * so we can't directly compare REAL values; skip these tests *)
 (*testRoundTrip (REAL 0.0);*)
 (*> val it = true : bool*)
 (*testRoundTrip (REAL 3.14);*)
@@ -348,8 +348,7 @@ val deeplyNested =
     ]
   ];
 > val deeplyNested =
->   [
->    [{active=true,name="Alice",scores=[95,87,92]},
+>   [[{active=true,name="Alice",scores=[95,87,92]},
 >     {active=false,name="Bob",scores=[88,90]}],
 >    [{active=true,name="Charlie",scores=[76,82,79,85]}]]
 >   : {active:bool, name:string, scores:int list} list list variant

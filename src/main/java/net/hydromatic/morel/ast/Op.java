@@ -40,6 +40,7 @@ public enum Op {
   INT_LITERAL(Assoc.ATOM),
   REAL_LITERAL(Assoc.ATOM),
   STRING_LITERAL(Assoc.ATOM),
+  WORD_LITERAL(Assoc.ATOM),
   UNIT_LITERAL(Assoc.ATOM),
   /** Literal whose value is a {@link net.hydromatic.morel.compile.BuiltIn}. */
   FN_LITERAL(Assoc.ATOM), // occurs in Core, not in Ast
@@ -62,6 +63,7 @@ public enum Op {
   INT_LITERAL_PAT(Assoc.ATOM),
   REAL_LITERAL_PAT(Assoc.ATOM),
   STRING_LITERAL_PAT(Assoc.ATOM),
+  WORD_LITERAL_PAT(Assoc.ATOM),
   // annotated pattern "p: t"
   ANNOTATED_PAT(" : "),
 
@@ -163,6 +165,9 @@ public enum Op {
   EXISTS,
   FORALL,
   SCAN(" "),
+  LEFT_JOIN(" left join "),
+  RIGHT_JOIN(" right join "),
+  FULL_JOIN(" full join "),
   DISTINCT,
   WHERE,
   GROUP,
@@ -273,6 +278,37 @@ public enum Op {
     return leftBound > left || rightBound > right;
   }
 
+  /**
+   * Returns whether this is a join operator ({@link #SCAN}, {@link #LEFT_JOIN},
+   * {@link #RIGHT_JOIN}, {@link #FULL_JOIN}).
+   */
+  public boolean isJoin() {
+    return this == SCAN
+        || this == LEFT_JOIN
+        || this == RIGHT_JOIN
+        || this == FULL_JOIN;
+  }
+
+  /**
+   * Returns whether this join operator makes the variables already in scope
+   * optional, that is, wraps them in {@code option} (yielding {@code NONE} for
+   * an input row that has no matching source row). True for {@code right join}
+   * and {@code full join}.
+   */
+  public boolean optionalizesLeft() {
+    return this == RIGHT_JOIN || this == FULL_JOIN;
+  }
+
+  /**
+   * Returns whether this join operator makes the newly scanned variable
+   * optional, that is, wraps it in {@code option} (yielding {@code NONE} for a
+   * source row that has no matching input row). True for {@code left join} and
+   * {@code full join}.
+   */
+  public boolean optionalizesRight() {
+    return this == LEFT_JOIN || this == FULL_JOIN;
+  }
+
   /** Returns the name in lower case, e.g. "exists" for {@link #EXISTS}. */
   public String lowerName() {
     return name().toLowerCase(Locale.ROOT);
@@ -294,6 +330,8 @@ public enum Op {
         return REAL_LITERAL_PAT;
       case STRING_LITERAL:
         return STRING_LITERAL_PAT;
+      case WORD_LITERAL:
+        return WORD_LITERAL_PAT;
       case TUPLE:
         return TUPLE_PAT;
       default:

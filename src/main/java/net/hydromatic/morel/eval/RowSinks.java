@@ -19,15 +19,18 @@
 package net.hydromatic.morel.eval;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.Comparators.isInOrder;
 import static java.util.Objects.requireNonNull;
 import static net.hydromatic.morel.util.Ord.forEachIndexed;
 
-import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
+import com.google.common.collect.MultimapBuilder;
 import com.google.common.collect.Multimaps;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -39,6 +42,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import net.hydromatic.morel.ast.Core;
 import net.hydromatic.morel.ast.Op;
+import net.hydromatic.morel.type.RecordType;
 import net.hydromatic.morel.util.ImmutablePairList;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -83,11 +87,10 @@ public abstract class RowSinks {
       ImmutableList<Code> codes,
       ImmutableList<String> names,
       ImmutablePairList<String, Code> inSlots,
-      int scanDepth,
       RowSink rowSink) {
     return distinct
-        ? new ExceptDistinctRowSink(codes, names, inSlots, scanDepth, rowSink)
-        : new ExceptAllRowSink(codes, names, inSlots, scanDepth, rowSink);
+        ? new ExceptDistinctRowSink(codes, names, inSlots, rowSink)
+        : new ExceptAllRowSink(codes, names, inSlots, rowSink);
   }
 
   /** Creates a {@link RowSink} for a {@code group} step. */
@@ -115,12 +118,10 @@ public abstract class RowSinks {
       ImmutableList<Code> codes,
       ImmutableList<String> names,
       ImmutablePairList<String, Code> inSlots,
-      int scanDepth,
       RowSink rowSink) {
     return distinct
-        ? new IntersectDistinctRowSink(
-            codes, names, inSlots, scanDepth, rowSink)
-        : new IntersectAllRowSink(codes, names, inSlots, scanDepth, rowSink);
+        ? new IntersectDistinctRowSink(codes, names, inSlots, rowSink)
+        : new IntersectAllRowSink(codes, names, inSlots, rowSink);
   }
 
   /** Creates a {@link RowSink} for an {@code order} step. */
@@ -128,12 +129,14 @@ public abstract class RowSinks {
       Code code,
       Comparator comparator,
       ImmutablePairList<String, Code> inSlots,
-      int scanDepth,
       RowSink rowSink) {
-    return new OrderRowSink(code, comparator, inSlots, scanDepth, rowSink);
+    return new OrderRowSink(code, comparator, inSlots, rowSink);
   }
 
-  /** Creates a {@link RowSink} for a scan or {@code join} step. */
+  /**
+   * Creates a {@link RowSink} for a scan, inner {@code join}, or {@code left
+   * join} step (all evaluated as nested loops).
+   */
   public static RowSink scan(
       Op op,
       Core.Pat pat,
@@ -142,6 +145,24 @@ public abstract class RowSinks {
       Code conditionCode,
       RowSink rowSink) {
     return new ScanRowSink(op, pat, varCount, code, conditionCode, rowSink);
+  }
+
+  /**
+   * Creates a build-side {@link RowSink} for a {@code right join} or {@code
+   * full join} step. Such a join may emit source ('right') rows that match no
+   * input ('left') row, so the source is materialized and probed by each input
+   * row, and unmatched source rows are emitted at the end.
+   */
+  public static RowSink buildJoin(
+      Op op,
+      Core.Pat pat,
+      int varCount,
+      int leftSlotCount,
+      Code code,
+      Code conditionCode,
+      RowSink rowSink) {
+    return new BuildJoinRowSink(
+        op, pat, varCount, leftSlotCount, code, conditionCode, rowSink);
   }
 
   /** Creates a {@link RowSink} for a {@code skip} step. */
@@ -160,15 +181,27 @@ public abstract class RowSinks {
       ImmutableList<Code> codes,
       ImmutableList<String> names,
       ImmutablePairList<String, Code> inSlots,
-      int scanDepth,
       RowSink rowSink) {
-    return new UnionRowSink(
-        distinct, codes, names, inSlots, scanDepth, rowSink);
+    return new UnionRowSink(distinct, codes, names, inSlots, rowSink);
   }
 
   /** Creates a {@link RowSink} for a {@code where} step. */
   public static RowSink where(Code filterCode, RowSink rowSink) {
     return new WhereRowSink(filterCode, rowSink);
+  }
+
+  /**
+   * Creates a {@link RowSink} that pushes the current row's variables onto the
+   * stack before passing it downstream.
+   *
+   * <p>It adapts a row produced "in the environment" (by name, after a {@code
+   * group}/{@code distinct}) to a downstream sink that expects it on the stack
+   * (positionally). The compiler inserts it when the two disagree; see {@link
+   * net.hydromatic.morel.compile.Compiler#compileSetSink}.
+   */
+  public static RowSink rematerialize(
+      ImmutablePairList<String, Code> slots, RowSink rowSink) {
+    return new RematerializeRowSink(slots, rowSink);
   }
 
   /** Creates a {@link RowSink} for a non-terminal {@code yield} step. */
@@ -245,10 +278,12 @@ public abstract class RowSinks {
 
   /** Implementation of {@link RowSink} for a {@code join} step. */
   private static class ScanRowSink extends BaseRowSink {
-    final Op op; // inner, left, right, full
+    final Op op; // inner (SCAN) or left
     final Core.Pat pat;
     /** Number of stack slots pushed per element. */
     final int varCount;
+    /** Whether the newly scanned fields are optional downstream (left join). */
+    final boolean optionalRight;
 
     final Code code;
     final Code conditionCode;
@@ -261,10 +296,14 @@ public abstract class RowSinks {
         Code conditionCode,
         RowSink rowSink) {
       super(rowSink);
-      checkArgument(op == Op.SCAN);
+      checkArgument(
+          op == Op.SCAN || op == Op.LEFT_JOIN,
+          "not a nested-loop join: %s",
+          op);
       this.op = op;
       this.pat = pat;
       this.varCount = varCount;
+      this.optionalRight = op.optionalizesRight();
       this.code = code;
       this.conditionCode = conditionCode;
     }
@@ -302,16 +341,212 @@ public abstract class RowSinks {
       // Grow slots if needed for scan variable slots.
       Stack s = stack.ensureSize(varCount);
       final int savedTop = s.save();
+      boolean matched = false;
       for (Object element : elements) {
         s.restore(savedTop);
         // Push scan variable bindings onto the stack.
         if (Closure.StackClosure.pushBindings(pat, element, s)) {
           if ((Boolean) conditionCode.eval(s)) {
+            if (optionalRight) {
+              // 'left join': the newly scanned fields are optional downstream,
+              // so wrap them in 'SOME'. (The 'on' condition above saw the raw,
+              // unwrapped values.)
+              for (int k = savedTop; k < savedTop + varCount; k++) {
+                s.slots[k] = Codes.optionSome(s.slots[k]);
+              }
+            }
+            matched = true;
             rowSink.accept(s);
           }
         }
       }
       s.restore(savedTop);
+      if (optionalRight && !matched) {
+        // 'left join' with no matching right row: emit the input ('left') row
+        // with 'NONE' for the newly scanned fields.
+        for (int k = 0; k < varCount; k++) {
+          s.push(Codes.OPTION_NONE);
+        }
+        rowSink.accept(s);
+        s.restore(savedTop);
+      }
+    }
+  }
+
+  /**
+   * Implementation of {@link RowSink} for a {@code right join} or {@code full
+   * join} step.
+   *
+   * <p>The source ('right') side is materialized once (it is independent of the
+   * input). Each input ('left') row probes it; matching pairs are emitted with
+   * the input fields wrapped in {@code SOME}. At the end, source rows that
+   * matched no input row are emitted with the input fields set to {@code NONE}.
+   * For a {@code full join}, an input row that matched nothing is also emitted,
+   * with the source fields set to {@code NONE}.
+   */
+  private static class BuildJoinRowSink extends BaseRowSink {
+    final Op op;
+    final Core.Pat pat;
+    /** Number of stack slots pushed per source element. */
+    final int varCount;
+    /** Number of stack slots occupied by input ('left') fields. */
+    final int leftSlotCount;
+
+    final Code code;
+    final Code conditionCode;
+    /** Whether the source fields are optional downstream (full join). */
+    final boolean optionalRight;
+
+    final boolean fullJoin;
+
+    /** Materialized source rows; set in {@link #start}. */
+    final List<Object> rightRows = new ArrayList<>();
+    /**
+     * Source rows that have not yet matched any input row (a set bit means the
+     * row at that index is unmatched). Iterated by {@link #result} to emit the
+     * unmatched rows, visiting only the set bits.
+     */
+    final BitSet rightUnmatched = new BitSet();
+
+    BuildJoinRowSink(
+        Op op,
+        Core.Pat pat,
+        int varCount,
+        int leftSlotCount,
+        Code code,
+        Code conditionCode,
+        RowSink rowSink) {
+      super(rowSink);
+      checkArgument(
+          op == Op.RIGHT_JOIN || op == Op.FULL_JOIN,
+          "not a build join: %s",
+          op);
+      this.op = op;
+      this.pat = pat;
+      this.varCount = varCount;
+      this.leftSlotCount = leftSlotCount;
+      this.code = code;
+      this.conditionCode = conditionCode;
+      this.optionalRight = op.optionalizesRight();
+      this.fullJoin = op == Op.FULL_JOIN;
+    }
+
+    @Override
+    public Describer describe(Describer describer) {
+      return describer.start(
+          "buildJoin",
+          d ->
+              d.arg("pat", pat)
+                  .arg("exp", code)
+                  .argIf(
+                      "condition",
+                      conditionCode,
+                      !ScanRowSink.isConstantTrue(conditionCode))
+                  .arg("sink", rowSink));
+    }
+
+    @Override
+    public int maxSlots() {
+      return leftSlotCount + varCount + rowSink.maxSlots();
+    }
+
+    @Override
+    public void start(Stack stack) {
+      // Materialize the source ('right') side. It is independent of the input,
+      // so a single evaluation suffices.
+      final Iterable<Object> elements = (Iterable<Object>) code.eval(stack);
+      this.rightRows.clear();
+      Iterables.addAll(rightRows, elements);
+      // Initially every source row is unmatched.
+      rightUnmatched.set(0, rightRows.size());
+      rightUnmatched.clear(rightRows.size(), rightUnmatched.length());
+      super.start(stack);
+    }
+
+    @Override
+    public void accept(Stack stack) {
+      final Stack s = stack.ensureSize(varCount);
+      final int savedTop = s.save();
+      // Save the raw input ('left') field values. They are present in this row,
+      // so we wrap them in 'SOME' below, but must restore them afterward so we
+      // do not corrupt the slots seen by earlier steps' loops.
+      final Object[] rawLeft = new Object[leftSlotCount];
+      System.arraycopy(
+          s.slots, savedTop - leftSlotCount, rawLeft, 0, leftSlotCount);
+      // Find the source rows matching this input row. The 'on' condition sees
+      // the raw, unwrapped values.
+      final int[] matchIndexes = new int[rightRows.size()];
+      int matchCount = 0;
+      for (int ri = 0; ri < rightRows.size(); ri++) {
+        s.restore(savedTop);
+        if (Closure.StackClosure.pushBindings(pat, rightRows.get(ri), s)
+            && (Boolean) conditionCode.eval(s)) {
+          matchIndexes[matchCount++] = ri;
+          rightUnmatched.clear(ri);
+        }
+      }
+      s.restore(savedTop);
+      // The input fields are present, so wrap them in 'SOME'.
+      for (int k = savedTop - leftSlotCount; k < savedTop; k++) {
+        s.slots[k] = Codes.optionSome(s.slots[k]);
+      }
+      // Emit each matching (input, source) pair.
+      for (int m = 0; m < matchCount; m++) {
+        s.restore(savedTop);
+        Closure.StackClosure.pushBindings(
+            pat, rightRows.get(matchIndexes[m]), s);
+        if (optionalRight) {
+          for (int k = savedTop; k < savedTop + varCount; k++) {
+            s.slots[k] = Codes.optionSome(s.slots[k]);
+          }
+        }
+        rowSink.accept(s);
+      }
+      s.restore(savedTop);
+      // 'full join': an input row matching no source row is emitted with 'NONE'
+      // for the source fields.
+      if (fullJoin && matchCount == 0) {
+        for (int k = 0; k < varCount; k++) {
+          s.push(Codes.OPTION_NONE);
+        }
+        rowSink.accept(s);
+        s.restore(savedTop);
+      }
+      // Restore the raw input field values.
+      System.arraycopy(
+          rawLeft, 0, s.slots, savedTop - leftSlotCount, leftSlotCount);
+    }
+
+    @Override
+    public List<Object> result(Stack stack) {
+      final Stack s = stack.ensureSize(leftSlotCount + varCount);
+      // At this point the input fields are no longer on the stack, so the top
+      // is at the query's base.
+      final int savedTop = s.save();
+      // Emit the source rows that matched no input row, visiting only the set
+      // (unmatched) bits.
+      for (int ri = rightUnmatched.nextSetBit(0);
+          ri >= 0;
+          ri = rightUnmatched.nextSetBit(ri + 1)) {
+        s.restore(savedTop);
+        // The input fields are absent: 'NONE'.
+        for (int k = 0; k < leftSlotCount; k++) {
+          s.push(Codes.OPTION_NONE);
+        }
+        // The source fields are present.
+        if (Closure.StackClosure.pushBindings(pat, rightRows.get(ri), s)) {
+          if (optionalRight) {
+            for (int k = savedTop + leftSlotCount;
+                k < savedTop + leftSlotCount + varCount;
+                k++) {
+              s.slots[k] = Codes.optionSome(s.slots[k]);
+            }
+          }
+          rowSink.accept(s);
+        }
+      }
+      s.restore(savedTop);
+      return rowSink.result(stack);
     }
   }
 
@@ -335,6 +570,51 @@ public abstract class RowSinks {
       if ((Boolean) filterCode.eval(stack)) {
         rowSink.accept(stack);
       }
+    }
+  }
+
+  /**
+   * Implementation of {@link RowSink} that pushes the current row's variables
+   * onto the stack before delegating, adapting an environment-based row to a
+   * stack-based downstream sink.
+   */
+  private static class RematerializeRowSink extends BaseRowSink {
+    /**
+     * (Name, code) slots that read the row's variables from the environment.
+     */
+    final ImmutablePairList<String, Code> slots;
+
+    RematerializeRowSink(
+        ImmutablePairList<String, Code> slots, RowSink rowSink) {
+      super(rowSink);
+      this.slots = slots;
+    }
+
+    @Override
+    public Describer describe(Describer describer) {
+      return describer.start("rematerialize", d -> d.arg("sink", rowSink));
+    }
+
+    @Override
+    public int maxSlots() {
+      return slots.size() + rowSink.maxSlots();
+    }
+
+    @Override
+    public void accept(Stack stack) {
+      // Evaluate all values from the input stack/env before pushing any, so
+      // that StackCode offsets stay valid throughout (mirrors YieldRowSink).
+      final Object[] values = new Object[slots.size()];
+      for (int i = 0; i < slots.size(); i++) {
+        values[i] = slots.right(i).eval(stack);
+      }
+      final Stack s = stack.ensureSize(slots.size());
+      final int savedTop = s.top;
+      for (Object value : values) {
+        s.push(value);
+      }
+      rowSink.accept(s);
+      s.restore(savedTop);
     }
   }
 
@@ -417,11 +697,6 @@ public abstract class RowSinks {
      * accept(Stack)}.
      */
     final ImmutablePairList<String, Code> inSlots;
-    /**
-     * Number of {@code names} entries that are stack-layout-based. These are
-     * pushed back onto the stack at {@code result()} time.
-     */
-    final int scanDepth;
 
     final Map<Object, int[]> map;
 
@@ -433,19 +708,21 @@ public abstract class RowSinks {
         ImmutableList<Code> codes,
         ImmutableList<String> names,
         ImmutablePairList<String, Code> inSlots,
-        int scanDepth,
         RowSink rowSink) {
       super(rowSink);
       checkArgument(
           op == Op.EXCEPT || op == Op.INTERSECT || op == Op.UNION,
           "invalid op %s",
           op);
+      checkArgument(
+          isInOrder(names, RecordType.ORDERING),
+          "names not in record order: %s",
+          names);
       this.op = op;
       this.distinct = distinct;
       this.codes = requireNonNull(codes);
       this.names = requireNonNull(names);
       this.inSlots = requireNonNull(inSlots);
-      this.scanDepth = scanDepth;
       this.values = new Object[names.size()];
       if (op == Op.UNION && !distinct) {
         // Union-all does not require storage.
@@ -463,7 +740,7 @@ public abstract class RowSinks {
     @Override
     public Describer describe(Describer describer) {
       return describer.start(
-          op.opName,
+          requireNonNull(op.opName),
           d -> {
             d.arg("distinct", distinct);
             forEachIndexed(codes, (code, i) -> d.arg("arg" + i, code));
@@ -475,15 +752,18 @@ public abstract class RowSinks {
      * Returns the map key for {@code element}.
      *
      * <p>For a single-name row, the key is the element itself. For a multi-name
-     * row, the element is an {@code Object[]} and the key is an {@link
-     * ImmutableList} of its entries.
+     * row, the element is a record, represented at runtime as a {@link List}
+     * (see {@link Codes.TupleCode}) with its fields in {@link
+     * RecordType#ORDERING} order. Because {@code names} is in that same order,
+     * the value's fields are the key directly, matching the key built by {@link
+     * #computeKey(Stack)} for the left-hand side, so the two sides probe the
+     * same map entries.
      */
     Object elementKey(Object element) {
       if (names.size() == 1) {
         return element;
-      } else {
-        return ImmutableList.copyOf((Object[]) element);
       }
+      return ImmutableList.copyOf((List<Object>) element);
     }
 
     /**
@@ -616,9 +896,8 @@ public abstract class RowSinks {
         ImmutableList<Code> codes,
         ImmutableList<String> names,
         ImmutablePairList<String, Code> inSlots,
-        int scanDepth,
         RowSink rowSink) {
-      super(Op.EXCEPT, false, codes, names, inSlots, scanDepth, rowSink);
+      super(Op.EXCEPT, false, codes, names, inSlots, rowSink);
     }
 
     @Override
@@ -641,7 +920,9 @@ public abstract class RowSinks {
           map.remove(value);
         }
       } else {
-        // Scan vars are live on the stack; pass through directly.
+        // The row's variables are live on the stack (a 'rematerialize' adapter
+        // is inserted upstream when they would otherwise be in the env); pass
+        // the stack through directly.
         rowSink.accept(stack);
       }
     }
@@ -653,9 +934,8 @@ public abstract class RowSinks {
         ImmutableList<Code> codes,
         ImmutableList<String> names,
         ImmutablePairList<String, Code> inSlots,
-        int scanDepth,
         RowSink rowSink) {
-      super(Op.EXCEPT, true, codes, names, inSlots, scanDepth, rowSink);
+      super(Op.EXCEPT, true, codes, names, inSlots, rowSink);
     }
 
     @Override
@@ -708,9 +988,8 @@ public abstract class RowSinks {
         ImmutableList<Code> codes,
         ImmutableList<String> names,
         ImmutablePairList<String, Code> inSlots,
-        int scanDepth,
         RowSink rowSink) {
-      super(Op.INTERSECT, false, codes, names, inSlots, scanDepth, rowSink);
+      super(Op.INTERSECT, false, codes, names, inSlots, rowSink);
     }
 
     @Override
@@ -751,7 +1030,6 @@ public abstract class RowSinks {
       map.computeIfPresent(
           value,
           (k, counts) -> {
-            // Scan vars are live on the stack; pass through directly.
             rowSink.accept(stack);
             return --counts[0] == 0 ? null : counts;
           });
@@ -776,9 +1054,8 @@ public abstract class RowSinks {
         ImmutableList<Code> codes,
         ImmutableList<String> names,
         ImmutablePairList<String, Code> inSlots,
-        int scanDepth,
         RowSink rowSink) {
-      super(Op.INTERSECT, true, codes, names, inSlots, scanDepth, rowSink);
+      super(Op.INTERSECT, true, codes, names, inSlots, rowSink);
     }
 
     @Override
@@ -827,15 +1104,15 @@ public abstract class RowSinks {
         ImmutableList<Code> codes,
         ImmutableList<String> names,
         ImmutablePairList<String, Code> inSlots,
-        int scanDepth,
         RowSink rowSink) {
-      super(Op.UNION, distinct, codes, names, inSlots, scanDepth, rowSink);
+      super(Op.UNION, distinct, codes, names, inSlots, rowSink);
     }
 
     @Override
     public void accept(Stack stack) {
       if (!distinct || add(stack)) {
-        // Scan vars are live on the stack; pass through directly.
+        // The row is live on the stack (see ExceptAllRowSink.accept); pass
+        // through directly.
         rowSink.accept(stack);
       }
     }
@@ -876,7 +1153,10 @@ public abstract class RowSinks {
     final int scanDepth;
 
     final ImmutableList<Applicable> aggregateCodes;
-    final ListMultimap<Object, Object> map = ArrayListMultimap.create();
+    // Keys iterate in the order they first arrive (not hash order), so that
+    // 'group' and 'distinct' preserve the input's arrival order.
+    final ListMultimap<Object, Object> map =
+        MultimapBuilder.linkedHashKeys().arrayListValues().build();
     final Object[] values;
 
     GroupRowSink(
@@ -992,11 +1272,6 @@ public abstract class RowSinks {
      * accept(Stack)}.
      */
     final ImmutablePairList<String, Code> inSlots;
-    /**
-     * Number of {@code inSlots} entries that are stack-layout-based. These are
-     * pushed back onto the stack at {@code result()} time.
-     */
-    final int scanDepth;
 
     final List<Object> rows = new ArrayList<>();
     final Object @Nullable [] values;
@@ -1005,13 +1280,11 @@ public abstract class RowSinks {
         Code code,
         Comparator comparator,
         ImmutablePairList<String, Code> inSlots,
-        int scanDepth,
         RowSink rowSink) {
       super(rowSink);
       this.code = code;
       this.comparator = comparator;
       this.inSlots = inSlots;
-      this.scanDepth = scanDepth;
       this.values = inSlots.size() == 1 ? null : new Object[inSlots.size()];
     }
 

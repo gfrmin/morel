@@ -20,11 +20,105 @@ package net.hydromatic.morel.parse;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import com.google.common.collect.ImmutableSet;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import net.hydromatic.morel.ast.Pos;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 /** Utilities for parsing. */
 public final class Parsers {
   private Parsers() {}
+
+  private static final Pattern LEXICAL_POS =
+      Pattern.compile("line (\\d+), column (\\d+)");
+
+  /**
+   * Returns the position embedded in a lexical-error message (e.g. "Lexical
+   * error at line 1, column 25"), adjusted by {@code lineOffset}, or {@link
+   * Pos#ZERO} if the message contains no position.
+   */
+  public static Pos lexicalPos(
+      @Nullable String message, String file, int lineOffset) {
+    if (message != null) {
+      final Matcher matcher = LEXICAL_POS.matcher(message);
+      if (matcher.find()) {
+        final int line = Integer.parseInt(matcher.group(1)) - lineOffset;
+        final int column = Integer.parseInt(matcher.group(2));
+        return new Pos(file, line, column, line, column);
+      }
+    }
+    return Pos.ZERO;
+  }
+
+  /**
+   * Reserved words. These cannot be used as identifiers unless quoted with
+   * back-ticks, so {@link #appendId} quotes them. Must be kept in sync with the
+   * keyword tokens in {@code MorelParser.jj}.
+   */
+  public static final Set<String> RESERVED_WORDS =
+      ImmutableSet.of(
+          "and",
+          "andalso",
+          "as",
+          "case",
+          "compute",
+          "current",
+          "datatype",
+          "distinct",
+          "div",
+          "elem",
+          "elements",
+          "else",
+          "end",
+          "eqtype",
+          "except",
+          "exception",
+          "exists",
+          "fn",
+          "forall",
+          "from",
+          "full",
+          "fun",
+          "group",
+          "if",
+          "implies",
+          "in",
+          "inst",
+          "intersect",
+          "into",
+          "join",
+          "left",
+          "let",
+          "mod",
+          "notelem",
+          "o",
+          "of",
+          "on",
+          "op",
+          "order",
+          "ordinal",
+          "orelse",
+          "over",
+          "raise",
+          "rec",
+          "require",
+          "right",
+          "sig",
+          "signature",
+          "skip",
+          "take",
+          "then",
+          "through",
+          "type",
+          "typeof",
+          "union",
+          "unorder",
+          "val",
+          "where",
+          "with",
+          "yield");
 
   /**
    * Given quoted identifier {@code `abc`} returns {@code abc}. Converts any
@@ -167,11 +261,14 @@ public final class Parsers {
     return false;
   }
 
-  /** Appends an identifier. Encloses it in back-ticks if necessary. */
+  /**
+   * Appends an identifier or label, enclosing it in back-ticks if necessary
+   * (because it contains a back-tick or space, or is a reserved word).
+   */
   public static StringBuilder appendId(StringBuilder buf, String id) {
     if (id.contains("`")) {
       return buf.append("`").append(id.replaceAll("`", "``")).append("`");
-    } else if (id.contains(" ")) {
+    } else if (id.contains(" ") || RESERVED_WORDS.contains(id)) {
       return buf.append("`").append(id).append("`");
     } else {
       return buf.append(id);

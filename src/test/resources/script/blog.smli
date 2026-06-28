@@ -40,16 +40,16 @@ val filter = List.filter;
 "Hello, world!";
 > val it = "Hello, world!" : string
 
-(*) In Morel, you can omit label = if the expression is an identifier,
-(*) label application, or field reference. Thus
+(* In Morel, you can omit label = if the expression is an identifier,
+ * label application, or field reference. Thus *)
 {#deptno e, e.name, d};
 > val it = {d=10,deptno=10,name="Fred"} : {d:int, deptno:int, name:string}
 (*) is shorthand for
 {deptno = #deptno e, name = e.name, d = d};
 > val it = {d=10,deptno=10,name="Fred"} : {d:int, deptno:int, name:string}
 
-(*) In a sense, from is syntactic sugar. For example, given emps and
-(*) depts, relations defined as lists of records as follows
+(* In a sense, from is syntactic sugar. For example, given emps and
+ * depts, relations defined as lists of records as follows *)
 val emps =
   [{id = 100, name = "Fred", deptno = 10},
    {id = 101, name = "Velma", deptno = 20},
@@ -75,8 +75,8 @@ from e in emps where e.deptno = 30 yield e.id;
 map (fn e => (#id e)) (filter (fn e => (#deptno e) = 30) emps);
 > val it = [102,103] : int list
 
-(*) You can iterate over more than one collection, and therefore
-(*) generate a join or a cartesian product:
+(* You can iterate over more than one collection, and therefore
+ * generate a join or a cartesian product: *)
 from e in emps, d in depts
   where e.deptno = d.deptno
   yield {e.id, e.deptno, ename = e.name, dname = d.name};
@@ -86,9 +86,9 @@ from e in emps, d in depts
 >    {deptno=30,dname="Engineering",ename="Shaggy",id=102},
 >    {deptno=30,dname="Engineering",ename="Scooby",id=103}]
 >   : {deptno:int, dname:string, ename:string, id:int} list
-(*) As in any ML expression, you can define functions within a from
-(*) expression, and those functions can operate on lists. Thus we can
-(*) implement equivalents of SQL's IN and EXISTS operators:
+(* As in any ML expression, you can define functions within a from
+ * expression, and those functions can operate on lists. Thus we can
+ * implement equivalents of SQL's IN and EXISTS operators: *)
 (* FIXME
 let
   fun in_ e [] = false
@@ -116,28 +116,28 @@ end;
 
 (* --- Screen cast ------------------------------------------------ *)
 
-(*) Now we're in morel's shell, for interactive commands.
-(*) First of all, we need to talk about comments.
+(* Now we're in morel's shell, for interactive commands.
+ * First of all, we need to talk about comments. *)
 
 (* This is a block comment, which can span multiple lines... *)
 
 (*) ... and this is a single-line comment.
 
-(*) Now, the basics.
-(*) Everything in ML is an expression.
+(* Now, the basics.
+ * Everything in ML is an expression. *)
 "a string literal";
 > val it = "a string literal" : string
 1 + 2;
 > val it = 3 : int
 
-(*) The Morel shell deduces the type of each expression,
-(*) and assigns it to a variable called "it".
-(*) We can use "it" in the next expression...
+(* The Morel shell deduces the type of each expression,
+ * and assigns it to a variable called "it".
+ * We can use "it" in the next expression... *)
 it + 4;
 > val it = 7 : int
 
-(*) We just saw string and int expressions.
-(*) There are also boolean, list, record and tuple types:
+(* We just saw string and int expressions.
+ * There are also boolean, list, record and tuple types: *)
 1 = 2;
 > val it = false : bool
 [1, 2, 3];
@@ -153,15 +153,15 @@ val x = 7;
 val y =  x mod 3;
 > val y = 1 : int
 
-(*) Functions are expressions, too.
-(*) "fn" makes a lambda expression.
+(* Functions are expressions, too.
+ * "fn" makes a lambda expression. *)
 val plusOne = fn x => x + 1;
 > val plusOne = fn : int -> int
 plusOne 2;
 > val it = 3 : int
 
-(*) Functions are widely used, so they have a shorthand.
-(*) "fun" is short for "val ... = fn".
+(* Functions are widely used, so they have a shorthand.
+ * "fun" is short for "val ... = fn". *)
 fun plusOne x = x + 1;
 > val plusOne = fn : int -> int
 plusOne 1000;
@@ -173,8 +173,8 @@ fun plus x y = x + y;
 plus 3 4;
 > val it = 7 : int
 
-(*) If we supply too few arguments, we get a closure that captures
-(*) the argument value and can be applied later.
+(* If we supply too few arguments, we get a closure that captures
+ * the argument value and can be applied later. *)
 val plusTen = plus 10;
 > val plusTen = fn : int -> int
 plusTen 2;
@@ -188,8 +188,8 @@ fact 1;
 fact 5;
 > val it = 120 : int
 
-(*) A higher-order function is a function that operates on other
-(*) functions. Here are a couple.
+(* A higher-order function is a function that operates on other
+ * functions. Here are a couple. *)
 
 (*) "map" applies another function to each element of a list
 let
@@ -201,8 +201,8 @@ in
 end;
 > val it = [2,4,6,8] : int list
 
-(*) "filter" keeps only those elements of a list for which
-(*) a predicate evaluates to true.
+(* "filter" keeps only those elements of a list for which
+ * a predicate evaluates to true. *)
 let
   fun filter p [] = []
     | filter p (head :: tail) =
@@ -216,18 +216,18 @@ in
 end;
 > val it = [2,4] : int list
 
-(*) You may notice that "map" and "filter" are very similar to the
-(*) "select" and "where" clauses of a SQL statement.
-(*)
-(*) This is no surprise: relational algebra, which underlies SQL, is
-(*) basically a collection of higher-order functions applied to
-(*) lists of records (relations).
-(*)
-(*) Can we extend ML syntax to make it easier to write relational
-(*) algebra expressions? You bet!
+(* You may notice that "map" and "filter" are very similar to the
+ * "select" and "where" clauses of a SQL statement.
+ *
+ * This is no surprise: relational algebra, which underlies SQL, is
+ * basically a collection of higher-order functions applied to
+ * lists of records (relations).
+ *
+ * Can we extend ML syntax to make it easier to write relational
+ * algebra expressions? You bet! *)
 
-(*) Let's start by defining "emps" and "depts" relations as lists of
-(*) records.
+(* Let's start by defining "emps" and "depts" relations as lists of
+ * records. *)
 val emps =
   [{id = 100, name = "Fred", deptno = 10},
    {id = 101, name = "Velma", deptno = 20},
@@ -270,12 +270,12 @@ from e in emps, d in depts
 >    {deptno=30,dname="Engineering",ename="Scooby",id=103}]
 >   : {deptno:int, dname:string, ename:string, id:int} list
 
-(*) A query with "exists" and a correlated sub-query.
-(*) We define the "exists" function ourselves: no need for a
-(*) built-in!
-(*)
-(*) Note: Since the blog post was written, we have added "exists"
-(*) as a keyword; to fix the example, we have added backticks.
+(* A query with "exists" and a correlated sub-query.
+ * We define the "exists" function ourselves: no need for a
+ * built-in!
+ *
+ * Note: Since the blog post was written, we have added "exists"
+ * as a keyword; to fix the example, we have added backticks. *)
 let
   fun exists_ [] = false
     | exists_ (head :: tail) = true
@@ -288,17 +288,17 @@ in
 end;
 > val it = ["Shaggy","Scooby"] : string list
 
-(*) That's all, folks!
-(*) To recap, Morel has:
-(*)  * expressions of int, string, boolean, float, char, list,
-(*)    tuple and record types;
-(*)  * lambda expressions and recursive functions;
-(*)  * algebraic datatypes and pattern-matching;
-(*)  * polymorphism and powerful type-inference;
-(*)  * relational expressions (an extension to Standard ML).
-(*)
-(*) Follow our progress at https://github.com/hydromatic/morel.
-(*) This is only release 0.1, so there's more to come!
+(* That's all, folks!
+ * To recap, Morel has:
+ *  * expressions of int, string, boolean, float, char, list,
+ *    tuple and record types;
+ *  * lambda expressions and recursive functions;
+ *  * algebraic datatypes and pattern-matching;
+ *  * polymorphism and powerful type-inference;
+ *  * relational expressions (an extension to Standard ML).
+ *
+ * Follow our progress at https://github.com/hydromatic/morel.
+ * This is only release 0.1, so there's more to come! *)
 
 (* --- 2020/02/25: Morel: A functional language for data ---------- *)
 
@@ -311,7 +311,7 @@ val hr = {
 > val hr =
 >   {depts=[{deptno=10,name="SALES"}],emps=[{deptno=10,id=100,name="SCOTT"}]}
 >   : {depts:{deptno:int, name:string} list,
->      emps:{deptno:int, id:int, name:string} list}
+>       emps:{deptno:int, id:int, name:string} list}
 
 (*) here is a query in Morel:
 from e in hr.emps,
@@ -593,7 +593,7 @@ fun mapReduce mapper reducer list =
   end;
 > val mapReduce = fn
 >   : ('a -> ('b * 'c) list)
->     -> ('b * 'c list -> 'd) -> 'a list -> ('b * 'd) list
+>      -> ('b * 'c list -> 'd) -> 'a list -> ('b * 'd) list
 
 fun wc_mapper line =
   let
@@ -682,9 +682,8 @@ from p in wordCount lines order p.word;
 
 val emps = scott.emps;
 > val emps = <relation>
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} bag
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real} bag
 val depts = scott.depts;
 > val depts = <relation> : {deptno:int, dname:string, loc:string} bag
 
@@ -703,18 +702,22 @@ from e in emps,
       minRemuneration = min over e.sal + e.comm}
   order (deptno, job);
 > val it =
->   [{deptno=10,dname="ACCOUNTING",job="CLERK",minRemuneration=1300,sumSal=1300},
+>   [{deptno=10,dname="ACCOUNTING",job="CLERK",minRemuneration=1300,
+>     sumSal=1300},
 >    {deptno=10,dname="ACCOUNTING",job="MANAGER",minRemuneration=2450,
 >     sumSal=2450},
 >    {deptno=10,dname="ACCOUNTING",job="PRESIDENT",minRemuneration=5000,
 >     sumSal=5000},
->    {deptno=20,dname="RESEARCH",job="ANALYST",minRemuneration=3000,sumSal=6000},
+>    {deptno=20,dname="RESEARCH",job="ANALYST",minRemuneration=3000,
+>     sumSal=6000},
 >    {deptno=20,dname="RESEARCH",job="CLERK",minRemuneration=800,sumSal=1900},
->    {deptno=20,dname="RESEARCH",job="MANAGER",minRemuneration=2975,sumSal=2975},
+>    {deptno=20,dname="RESEARCH",job="MANAGER",minRemuneration=2975,
+>     sumSal=2975},
 >    {deptno=30,dname="SALES",job="CLERK",minRemuneration=950,sumSal=950},
 >    {deptno=30,dname="SALES",job="MANAGER",minRemuneration=2850,sumSal=2850},
 >    {deptno=30,dname="SALES",job="SALESMAN",minRemuneration=1500,sumSal=5600}]
->   : {deptno:int, dname:string, job:string, minRemuneration:real, sumSal:real} list
+>   : {deptno:int, dname:string, job:string, minRemuneration:real, sumSal:real}
+>     list
 
 (*) In this example, we define our own version of the `sum` function:
 let
@@ -989,203 +992,183 @@ foodmart;
 >    agg_g_ms_pcat_sales_fact_1997=<relation>,
 >    agg_l_03_sales_fact_1997=<relation>,agg_l_04_sales_fact_1997=<relation>,
 >    agg_l_05_sales_fact_1997=<relation>,agg_lc_06_sales_fact_1997=<relation>,
->    agg_lc_100_sales_fact_1997=<relation>,agg_ll_01_sales_fact_1997=<relation>,
->    agg_pl_01_sales_fact_1997=<relation>,category=<relation>,
->    currency=<relation>,customer=<relation>,days=<relation>,
->    department=<relation>,employee=<relation>,employee_closure=<relation>,
->    expense_fact=<relation>,inventory_fact_1997=<relation>,
->    inventory_fact_1998=<relation>,position=<relation>,product=<relation>,
->    product_class=<relation>,promotion=<relation>,region=<relation>,
->    reserve_employee=<relation>,salary=<relation>,sales_fact_1997=<relation>,
->    sales_fact_1998=<relation>,sales_fact_dec_1998=<relation>,store=<relation>,
->    store_ragged=<relation>,time_by_day=<relation>,warehouse=<relation>,
->    warehouse_class=<relation>}
->   : {
->      account:
->              {account_description:string, account_id:int, account_parent:int,
->               account_rollup:string, account_type:string,
->               custom_members:string} bag,
->      agg_c_10_sales_fact_1997:
->                               {customer_count:int, fact_count:int,
->                                month_of_year:int, quarter:string,
->                                store_cost:real, store_sales:real, the_year:int,
->                                unit_sales:real} bag,
->      agg_c_14_sales_fact_1997:
->                               {customer_id:int, fact_count:int,
->                                month_of_year:int, product_id:int,
->                                promotion_id:int, quarter:string,
->                                store_cost:real, store_id:int, store_sales:real,
->                                the_year:int, unit_sales:real} bag,
->      agg_c_special_sales_fact_1997:
->                                    {customer_id:int, fact_count:int,
->                                     product_id:int, promotion_id:int,
->                                     store_cost_sum:real, store_id:int,
->                                     store_sales_sum:real, time_month:int,
->                                     time_quarter:string, time_year:int,
->                                     unit_sales_sum:real} bag,
->      agg_g_ms_pcat_sales_fact_1997:
->                                    {customer_count:int, fact_count:int,
->                                     gender:string, marital_status:string,
->                                     month_of_year:int, product_category:string,
->                                     product_department:string,
->                                     product_family:string, quarter:string,
->                                     store_cost:real, store_sales:real,
->                                     the_year:int, unit_sales:real} bag,
->      agg_l_03_sales_fact_1997:
->                               {customer_id:int, fact_count:int,
->                                store_cost:real, store_sales:real, time_id:int,
->                                unit_sales:real} bag,
->      agg_l_04_sales_fact_1997:
->                               {customer_count:int, fact_count:int,
->                                store_cost:real, store_sales:real, time_id:int,
->                                unit_sales:real} bag,
->      agg_l_05_sales_fact_1997:
->                               {customer_id:int, fact_count:int, product_id:int,
->                                promotion_id:int, store_cost:real, store_id:int,
->                                store_sales:real, unit_sales:real} bag,
->      agg_lc_06_sales_fact_1997:
->                                {city:string, country:string, fact_count:int,
->                                 state_province:string, store_cost:real,
->                                 store_sales:real, time_id:int, unit_sales:real} bag,
->      agg_lc_100_sales_fact_1997:
->                                 {customer_id:int, fact_count:int,
->                                  product_id:int, quarter:string,
+>    agg_lc_100_sales_fact_1997=<relation>,
+>    agg_ll_01_sales_fact_1997=<relation>,agg_pl_01_sales_fact_1997=<relation>,
+>    category=<relation>,currency=<relation>,customer=<relation>,
+>    days=<relation>,department=<relation>,employee=<relation>,
+>    employee_closure=<relation>,expense_fact=<relation>,
+>    inventory_fact_1997=<relation>,inventory_fact_1998=<relation>,
+>    position=<relation>,product=<relation>,product_class=<relation>,
+>    promotion=<relation>,region=<relation>,reserve_employee=<relation>,
+>    salary=<relation>,sales_fact_1997=<relation>,sales_fact_1998=<relation>,
+>    sales_fact_dec_1998=<relation>,store=<relation>,store_ragged=<relation>,
+>    time_by_day=<relation>,warehouse=<relation>,warehouse_class=<relation>}
+>   : {account:{account_description:string, account_id:int, account_parent:int,
+>                account_rollup:string, account_type:string,
+>                custom_members:string} bag,
+>       agg_c_10_sales_fact_1997:{customer_count:int, fact_count:int,
+>                                  month_of_year:int, quarter:string,
 >                                  store_cost:real, store_sales:real,
 >                                  the_year:int, unit_sales:real} bag,
->      agg_ll_01_sales_fact_1997:
->                                {customer_id:int, fact_count:int,
->                                 product_id:int, store_cost:real,
->                                 store_sales:real, time_id:int, unit_sales:real} bag,
->      agg_pl_01_sales_fact_1997:
->                                {customer_id:int, fact_count:int,
->                                 product_id:int, store_cost_sum:real,
->                                 store_sales_sum:real, time_id:int,
->                                 unit_sales_sum:real} bag,
->      category:
->               {category_description:string, category_id:string,
->                category_parent:string, category_rollup:string} bag,
->      currency:
->               {conversion_ratio:real, currency:string, currency_id:int,
->                date:string} bag,
->      customer:
->               {account_num:int, address1:string, address2:string,
->                address3:string, address4:string, birthdate:string, city:string,
->                country:string, customer_id:int, customer_region_id:int,
->                date_accnt_opened:string, education:string, fname:string,
->                fullname:string, gender:string, houseowner:string, lname:string,
->                marital_status:string, member_card:string, mi:string,
->                num_cars_owned:int, num_children_at_home:int, occupation:string,
->                phone1:string, phone2:string, postal_code:string,
->                state_province:string, total_children:int, yearly_income:string} bag,
->      days:{day:int, week_day:string} bag,
->      department:{department_description:string, department_id:int} bag,
->      employee:
->               {birth_date:string, department_id:int, education_level:string,
->                employee_id:int, end_date:string, first_name:string,
->                full_name:string, gender:string, hire_date:string,
->                last_name:string, management_role:string, marital_status:string,
->                position_id:int, position_title:string, salary:real,
->                store_id:int, supervisor_id:int} bag,
->      employee_closure:{distance:int, employee_id:int, supervisor_id:int} bag,
->      expense_fact:
->                   {account_id:int, amount:real, category_id:string,
->                    currency_id:int, exp_date:string, store_id:int, time_id:int} bag,
->      inventory_fact_1997:
->                          {product_id:int, store_id:int, store_invoice:real,
->                           supply_time:int, time_id:int, units_ordered:int,
->                           units_shipped:int, warehouse_cost:real,
->                           warehouse_id:int, warehouse_sales:real} bag,
->      inventory_fact_1998:
->                          {product_id:int, store_id:int, store_invoice:real,
->                           supply_time:int, time_id:int, units_ordered:int,
->                           units_shipped:int, warehouse_cost:real,
->                           warehouse_id:int, warehouse_sales:real} bag,
->      position:
->               {management_role:string, max_scale:real, min_scale:real,
->                pay_type:string, position_id:int, position_title:string} bag,
->      product:
->              {brand_name:string, cases_per_pallet:int, gross_weight:real,
->               low_fat:bool, net_weight:real, product_class_id:int,
->               product_id:int, product_name:string, recyclable_package:bool,
->               shelf_depth:real, shelf_height:real, shelf_width:real, sku:int,
->               srp:real, units_per_case:int} bag,
->      product_class:
->                    {product_category:string, product_class_id:int,
->                     product_department:string, product_family:string,
->                     product_subcategory:string} bag,
->      promotion:
->                {cost:real, end_date:string, media_type:string,
->                 promotion_district_id:int, promotion_id:int,
->                 promotion_name:string, start_date:string} bag,
->      region:
->             {region_id:int, sales_city:string, sales_country:string,
->              sales_district:string, sales_district_id:int, sales_region:string,
->              sales_state_province:string} bag,
->      reserve_employee:
->                       {birth_date:string, department_id:int,
->                        education_level:string, employee_id:int,
->                        end_date:string, first_name:string, full_name:string,
->                        gender:string, hire_date:string, last_name:string,
->                        marital_status:string, position_id:int,
->                        position_title:string, salary:real, store_id:int,
->                        supervisor_id:int} bag,
->      salary:
->             {currency_id:int, department_id:int, employee_id:int,
->              overtime_paid:real, pay_date:string, salary_paid:real,
->              vacation_accrued:real, vacation_used:real} bag,
->      sales_fact_1997:
->                      {customer_id:int, product_id:int, promotion_id:int,
->                       store_cost:real, store_id:int, store_sales:real,
->                       time_id:int, unit_sales:real} bag,
->      sales_fact_1998:
->                      {customer_id:int, product_id:int, promotion_id:int,
->                       store_cost:real, store_id:int, store_sales:real,
->                       time_id:int, unit_sales:real} bag,
->      sales_fact_dec_1998:
->                          {customer_id:int, product_id:int, promotion_id:int,
->                           store_cost:real, store_id:int, store_sales:real,
->                           time_id:int, unit_sales:real} bag,
->      store:
->            {coffee_bar:bool, first_opened_date:string, florist:bool,
->             frozen_sqft:int, grocery_sqft:int, last_remodel_date:string,
->             meat_sqft:int, prepared_food:bool, region_id:int, salad_bar:bool,
->             store_city:string, store_country:string, store_fax:string,
->             store_id:int, store_manager:string, store_name:string,
->             store_number:int, store_phone:string, store_postal_code:string,
->             store_sqft:int, store_state:string, store_street_address:string,
->             store_type:string, video_store:bool} bag,
->      store_ragged:
->                   {coffee_bar:bool, first_opened_date:string, florist:bool,
->                    frozen_sqft:int, grocery_sqft:int, last_remodel_date:string,
->                    meat_sqft:int, prepared_food:bool, region_id:int,
->                    salad_bar:bool, store_city:string, store_country:string,
->                    store_fax:string, store_id:int, store_manager:string,
->                    store_name:string, store_number:int, store_phone:string,
->                    store_postal_code:string, store_sqft:int,
->                    store_state:string, store_street_address:string,
->                    store_type:string, video_store:bool} bag,
->      time_by_day:
->                  {day_of_month:int, fiscal_period:string, month_of_year:int,
->                   quarter:string, the_date:string, the_day:string,
->                   the_month:string, the_year:int, time_id:int,
->                   week_of_year:int} bag,
->      warehouse:
->                {stores_id:int, wa_address1:string, wa_address2:string,
->                 wa_address3:string, wa_address4:string, warehouse_city:string,
->                 warehouse_class_id:int, warehouse_country:string,
->                 warehouse_fax:string, warehouse_id:int, warehouse_name:string,
->                 warehouse_owner_name:string, warehouse_phone:string,
->                 warehouse_postal_code:string, warehouse_state_province:string} bag,
->      warehouse_class:{description:string, warehouse_class_id:int} bag}
+>       agg_c_14_sales_fact_1997:{customer_id:int, fact_count:int,
+>                                  month_of_year:int, product_id:int,
+>                                  promotion_id:int, quarter:string,
+>                                  store_cost:real, store_id:int,
+>                                  store_sales:real, the_year:int,
+>                                  unit_sales:real} bag,
+>       agg_c_special_sales_fact_1997:{customer_id:int, fact_count:int,
+>                                       product_id:int, promotion_id:int,
+>                                       store_cost_sum:real, store_id:int,
+>                                       store_sales_sum:real, time_month:int,
+>                                       time_quarter:string, time_year:int,
+>                                       unit_sales_sum:real} bag,
+>       agg_g_ms_pcat_sales_fact_1997:{customer_count:int, fact_count:int,
+>                                       gender:string, marital_status:string,
+>                                       month_of_year:int,
+>                                       product_category:string,
+>                                       product_department:string,
+>                                       product_family:string, quarter:string,
+>                                       store_cost:real, store_sales:real,
+>                                       the_year:int, unit_sales:real} bag,
+>       agg_l_03_sales_fact_1997:{customer_id:int, fact_count:int,
+>                                  store_cost:real, store_sales:real,
+>                                  time_id:int, unit_sales:real} bag,
+>       agg_l_04_sales_fact_1997:{customer_count:int, fact_count:int,
+>                                  store_cost:real, store_sales:real,
+>                                  time_id:int, unit_sales:real} bag,
+>       agg_l_05_sales_fact_1997:{customer_id:int, fact_count:int,
+>                                  product_id:int, promotion_id:int,
+>                                  store_cost:real, store_id:int,
+>                                  store_sales:real, unit_sales:real} bag,
+>       agg_lc_06_sales_fact_1997:{city:string, country:string, fact_count:int,
+>                                   state_province:string, store_cost:real,
+>                                   store_sales:real, time_id:int,
+>                                   unit_sales:real} bag,
+>       agg_lc_100_sales_fact_1997:{customer_id:int, fact_count:int,
+>                                    product_id:int, quarter:string,
+>                                    store_cost:real, store_sales:real,
+>                                    the_year:int, unit_sales:real} bag,
+>       agg_ll_01_sales_fact_1997:{customer_id:int, fact_count:int,
+>                                   product_id:int, store_cost:real,
+>                                   store_sales:real, time_id:int,
+>                                   unit_sales:real} bag,
+>       agg_pl_01_sales_fact_1997:{customer_id:int, fact_count:int,
+>                                   product_id:int, store_cost_sum:real,
+>                                   store_sales_sum:real, time_id:int,
+>                                   unit_sales_sum:real} bag,
+>       category:{category_description:string, category_id:string,
+>                  category_parent:string, category_rollup:string} bag,
+>       currency:{conversion_ratio:real, currency:string, currency_id:int,
+>                  date:string} bag,
+>       customer:{account_num:int, address1:string, address2:string,
+>                  address3:string, address4:string, birthdate:string,
+>                  city:string, country:string, customer_id:int,
+>                  customer_region_id:int, date_accnt_opened:string,
+>                  education:string, fname:string, fullname:string,
+>                  gender:string, houseowner:string, lname:string,
+>                  marital_status:string, member_card:string, mi:string,
+>                  num_cars_owned:int, num_children_at_home:int,
+>                  occupation:string, phone1:string, phone2:string,
+>                  postal_code:string, state_province:string,
+>                  total_children:int, yearly_income:string} bag,
+>       days:{day:int, week_day:string} bag,
+>       department:{department_description:string, department_id:int} bag,
+>       employee:{birth_date:string, department_id:int, education_level:string,
+>                  employee_id:int, end_date:string, first_name:string,
+>                  full_name:string, gender:string, hire_date:string,
+>                  last_name:string, management_role:string,
+>                  marital_status:string, position_id:int,
+>                  position_title:string, salary:real, store_id:int,
+>                  supervisor_id:int} bag,
+>       employee_closure:{distance:int, employee_id:int, supervisor_id:int}
+>                        bag,
+>       expense_fact:{account_id:int, amount:real, category_id:string,
+>                      currency_id:int, exp_date:string, store_id:int,
+>                      time_id:int} bag,
+>       inventory_fact_1997:{product_id:int, store_id:int, store_invoice:real,
+>                             supply_time:int, time_id:int, units_ordered:int,
+>                             units_shipped:int, warehouse_cost:real,
+>                             warehouse_id:int, warehouse_sales:real} bag,
+>       inventory_fact_1998:{product_id:int, store_id:int, store_invoice:real,
+>                             supply_time:int, time_id:int, units_ordered:int,
+>                             units_shipped:int, warehouse_cost:real,
+>                             warehouse_id:int, warehouse_sales:real} bag,
+>       position:{management_role:string, max_scale:real, min_scale:real,
+>                  pay_type:string, position_id:int, position_title:string}
+>                bag,
+>       product:{brand_name:string, cases_per_pallet:int, gross_weight:real,
+>                 low_fat:bool, net_weight:real, product_class_id:int,
+>                 product_id:int, product_name:string, recyclable_package:bool,
+>                 shelf_depth:real, shelf_height:real, shelf_width:real,
+>                 sku:int, srp:real, units_per_case:int} bag,
+>       product_class:{product_category:string, product_class_id:int,
+>                       product_department:string, product_family:string,
+>                       product_subcategory:string} bag,
+>       promotion:{cost:real, end_date:string, media_type:string,
+>                   promotion_district_id:int, promotion_id:int,
+>                   promotion_name:string, start_date:string} bag,
+>       region:{region_id:int, sales_city:string, sales_country:string,
+>                sales_district:string, sales_district_id:int,
+>                sales_region:string, sales_state_province:string} bag,
+>       reserve_employee:{birth_date:string, department_id:int,
+>                          education_level:string, employee_id:int,
+>                          end_date:string, first_name:string,
+>                          full_name:string, gender:string, hire_date:string,
+>                          last_name:string, marital_status:string,
+>                          position_id:int, position_title:string, salary:real,
+>                          store_id:int, supervisor_id:int} bag,
+>       salary:{currency_id:int, department_id:int, employee_id:int,
+>                overtime_paid:real, pay_date:string, salary_paid:real,
+>                vacation_accrued:real, vacation_used:real} bag,
+>       sales_fact_1997:{customer_id:int, product_id:int, promotion_id:int,
+>                         store_cost:real, store_id:int, store_sales:real,
+>                         time_id:int, unit_sales:real} bag,
+>       sales_fact_1998:{customer_id:int, product_id:int, promotion_id:int,
+>                         store_cost:real, store_id:int, store_sales:real,
+>                         time_id:int, unit_sales:real} bag,
+>       sales_fact_dec_1998:{customer_id:int, product_id:int, promotion_id:int,
+>                             store_cost:real, store_id:int, store_sales:real,
+>                             time_id:int, unit_sales:real} bag,
+>       store:{coffee_bar:bool, first_opened_date:string, florist:bool,
+>               frozen_sqft:int, grocery_sqft:int, last_remodel_date:string,
+>               meat_sqft:int, prepared_food:bool, region_id:int,
+>               salad_bar:bool, store_city:string, store_country:string,
+>               store_fax:string, store_id:int, store_manager:string,
+>               store_name:string, store_number:int, store_phone:string,
+>               store_postal_code:string, store_sqft:int, store_state:string,
+>               store_street_address:string, store_type:string,
+>               video_store:bool} bag,
+>       store_ragged:{coffee_bar:bool, first_opened_date:string, florist:bool,
+>                      frozen_sqft:int, grocery_sqft:int,
+>                      last_remodel_date:string, meat_sqft:int,
+>                      prepared_food:bool, region_id:int, salad_bar:bool,
+>                      store_city:string, store_country:string,
+>                      store_fax:string, store_id:int, store_manager:string,
+>                      store_name:string, store_number:int, store_phone:string,
+>                      store_postal_code:string, store_sqft:int,
+>                      store_state:string, store_street_address:string,
+>                      store_type:string, video_store:bool} bag,
+>       time_by_day:{day_of_month:int, fiscal_period:string, month_of_year:int,
+>                     quarter:string, the_date:string, the_day:string,
+>                     the_month:string, the_year:int, time_id:int,
+>                     week_of_year:int} bag,
+>       warehouse:{stores_id:int, wa_address1:string, wa_address2:string,
+>                   wa_address3:string, wa_address4:string,
+>                   warehouse_city:string, warehouse_class_id:int,
+>                   warehouse_country:string, warehouse_fax:string,
+>                   warehouse_id:int, warehouse_name:string,
+>                   warehouse_owner_name:string, warehouse_phone:string,
+>                   warehouse_postal_code:string,
+>                   warehouse_state_province:string} bag,
+>       warehouse_class:{description:string, warehouse_class_id:int} bag}
 scott;
 > val it =
 >   {bonuses=<relation>,depts=<relation>,emps=<relation>,salgrades=<relation>}
 >   : {bonuses:{comm:real, ename:string, job:string, sal:real} bag,
->      depts:{deptno:int, dname:string, loc:string} bag,
->      emps:
->           {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->            job:string, mgr:int, sal:real} bag,
->      salgrades:{grade:int, hisal:real, losal:real} bag}
+>       depts:{deptno:int, dname:string, loc:string} bag,
+>       emps:{comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>              job:string, mgr:int, sal:real} bag,
+>       salgrades:{grade:int, hisal:real, losal:real} bag}
 scott.depts;
 > val it = <relation> : {deptno:int, dname:string, loc:string} bag
 from d in scott.depts
@@ -1233,7 +1216,7 @@ fun mapReduce mapper reducer list =
     group k compute {c = (fn vs => reducer (k, vs)) over v};
 > val mapReduce = fn
 >   : ('a -> ('b * 'c) list)
->     -> ('b * 'c list -> 'd) -> 'a list -> {c:'d, k:'b} list
+>      -> ('b * 'c list -> 'd) -> 'a list -> {c:'d, k:'b} list
 fun wc_mapper line =
   List.map (fn w => (w, 1)) (split line);
 > val wc_mapper = fn : string -> (string * int) list
@@ -1310,11 +1293,13 @@ fun remaining (words: string list, []) = words
 
 bestGuesses (remaining (words, [("aster", "ybbby")]));
 > val it =
->   [{maskCount=54,w="marid"},{maskCount=54,w="moria"},{maskCount=51,w="daric"},
->    {maskCount=51,w="moira"},{maskCount=50,w="caird"},{maskCount=50,w="coria"},
->    {maskCount=49,w="carbo"},{maskCount=49,w="cardi"},{maskCount=49,w="coram"},
->    {maskCount=49,w="darcy"},{maskCount=49,w="moral"},{maskCount=48,w="maria"},
->    ...] : {maskCount:int, w:string} list
+>   [{maskCount=54,w="marid"},{maskCount=54,w="moria"},
+>    {maskCount=51,w="daric"},{maskCount=51,w="moira"},
+>    {maskCount=50,w="caird"},{maskCount=50,w="coria"},
+>    {maskCount=49,w="carbo"},{maskCount=49,w="cardi"},
+>    {maskCount=49,w="coram"},{maskCount=49,w="darcy"},
+>    {maskCount=49,w="moral"},{maskCount=48,w="maria"},...]
+>   : {maskCount:int, w:string} list
 
 (*) Functional programming  –  values, types, operators
 1 + 2;
@@ -1435,29 +1420,25 @@ val emps2 =
   from e in scott.emps
     where not (e.sal > 1000.0);
 > val emps2 =
->   [
->    {comm=0,deptno=20,empno=7369,ename="SMITH",hiredate="1980-12-17",
+>   [{comm=0,deptno=20,empno=7369,ename="SMITH",hiredate="1980-12-17",
 >     job="CLERK",mgr=7902,sal=800},
 >    {comm=0,deptno=30,empno=7900,ename="JAMES",hiredate="1981-12-03",
 >     job="CLERK",mgr=7698,sal=950}]
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} bag
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real} bag
 (* Add one employee. *)
 val emps3 = from e in emps2 union
   [{empno = 100, deptno = 20, ename = "HYDE", job = "ANALYST",
     sal = 1150.0, hiredate = "2023-10-01", mgr = 7902, comm = 0.0}];
 > val emps3 =
->   [
->    {comm=0,deptno=20,empno=7369,ename="SMITH",hiredate="1980-12-17",
+>   [{comm=0,deptno=20,empno=7369,ename="SMITH",hiredate="1980-12-17",
 >     job="CLERK",mgr=7902,sal=800},
 >    {comm=0,deptno=30,empno=7900,ename="JAMES",hiredate="1981-12-03",
 >     job="CLERK",mgr=7698,sal=950},
 >    {comm=0,deptno=20,empno=100,ename="HYDE",hiredate="2023-10-01",
 >     job="ANALYST",mgr=7902,sal=1150}]
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} bag
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real} bag
 (* Double the salary of all managers. *)
 val emps4 =
   from e in emps3
@@ -1465,32 +1446,27 @@ val emps4 =
       then {e with sal = e.sal * 2.0}
       else e;
 > val emps4 =
->   [
->    {comm=0,deptno=20,empno=7369,ename="SMITH",hiredate="1980-12-17",
+>   [{comm=0,deptno=20,empno=7369,ename="SMITH",hiredate="1980-12-17",
 >     job="CLERK",mgr=7902,sal=800},
 >    {comm=0,deptno=30,empno=7900,ename="JAMES",hiredate="1981-12-03",
 >     job="CLERK",mgr=7698,sal=950},
 >    {comm=0,deptno=20,empno=100,ename="HYDE",hiredate="2023-10-01",
 >     job="ANALYST",mgr=7902,sal=1150}]
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} bag
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real} bag
 (* Commit. *)
 (*) TODO commit {scott with emps = emps4};
 
 (* New and removed employees. *)
 val empsAdded = from e in emps4 except scott.emps;
 > val empsAdded =
->   [
->    {comm=0,deptno=20,empno=100,ename="HYDE",hiredate="2023-10-01",
+>   [{comm=0,deptno=20,empno=100,ename="HYDE",hiredate="2023-10-01",
 >     job="ANALYST",mgr=7902,sal=1150}]
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} bag
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real} bag
 val empsRemoved = from e in scott.emps except emps4;
 > val empsRemoved =
->   [
->    {comm=300,deptno=30,empno=7499,ename="ALLEN",hiredate="1981-02-20",
+>   [{comm=300,deptno=30,empno=7499,ename="ALLEN",hiredate="1981-02-20",
 >     job="SALESMAN",mgr=7698,sal=1600},
 >    {comm=500,deptno=30,empno=7521,ename="WARD",hiredate="1981-02-22",
 >     job="SALESMAN",mgr=7698,sal=1250},
@@ -1514,9 +1490,8 @@ val empsRemoved = from e in scott.emps except emps4;
 >     job="ANALYST",mgr=7566,sal=3000},
 >    {comm=0,deptno=10,empno=7934,ename="MILLER",hiredate="1982-01-23",
 >     job="CLERK",mgr=7782,sal=1300}]
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} bag
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real} bag
 
 (*) Empty summary table.
 val summary = [] : {c:int, deptno:int, sum_sal:real} list;
@@ -1572,9 +1547,8 @@ fun clerks () =
     where e.job = "CLERK";
 > val clerks = fn
 >   : unit
->     ->
->        {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->         job:string, mgr:int, sal:real} bag
+>      -> {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>           job:string, mgr:int, sal:real} bag
 (* Query uses regular iteration. *)
 from e in clerks (),
     d in scott.depts
@@ -1856,44 +1830,19 @@ from
 
 from deptno in [10, 20],
     emp in scott.emps on emp.deptno = deptno;
-> val it =
->   [
->    {deptno=10,
->     emp=
->     {comm=0,deptno=10,empno=7782,ename="CLARK",
->      hiredate="1981-06-09",job="MANAGER",mgr=7839,sal=2450}},
->    {deptno=10,
->     emp=
->     {comm=0,deptno=10,empno=7839,ename="KING",
->      hiredate="1981-11-17",job="PRESIDENT",mgr=0,sal=5000}},
->    {deptno=10,
->     emp=
->     {comm=0,deptno=10,empno=7934,ename="MILLER",
->      hiredate="1982-01-23",job="CLERK",mgr=7782,sal=1300}},
->    {deptno=20,
->     emp=
->     {comm=0,deptno=20,empno=7369,ename="SMITH",
->      hiredate="1980-12-17",job="CLERK",mgr=7902,sal=800}},
->    {deptno=20,
->     emp=
->     {comm=0,deptno=20,empno=7566,ename="JONES",
->      hiredate="1981-02-04",job="MANAGER",mgr=7839,sal=2975}},
->    {deptno=20,
->     emp=
->     {comm=0,deptno=20,empno=7788,ename="SCOTT",
->      hiredate="1987-04-19",job="ANALYST",mgr=7566,sal=3000}},
->    {deptno=20,
->     emp=
->     {comm=0,deptno=20,empno=7876,ename="ADAMS",
->      hiredate="1987-05-23",job="CLERK",mgr=7788,sal=1100}},
->    {deptno=20,
->     emp=
->     {comm=0,deptno=20,empno=7902,ename="FORD",
->      hiredate="1981-12-03",job="ANALYST",mgr=7566,sal=3000}}]
->   :
->     {deptno:int,
->      emp:{comm:real, deptno:int, empno:int, ename:string,
->           hiredate:string, job:string, mgr:int, sal:real}} bag
+> deptno emp
+>        comm deptno empno ename  hiredate   job       mgr  sal
+> ------ ---- ------ ----- ------ ---------- --------- ---- ----
+>     10    0     10  7782 CLARK  1981-06-09 MANAGER   7839 2450
+>     10    0     10  7839 KING   1981-11-17 PRESIDENT    0 5000
+>     10    0     10  7934 MILLER 1982-01-23 CLERK     7782 1300
+>     20    0     20  7369 SMITH  1980-12-17 CLERK     7902  800
+>     20    0     20  7566 JONES  1981-02-04 MANAGER   7839 2975
+>     20    0     20  7788 SCOTT  1987-04-19 ANALYST   7566 3000
+>     20    0     20  7876 ADAMS  1987-05-23 CLERK     7788 1100
+>     20    0     20  7902 FORD   1981-12-03 ANALYST   7566 3000
+>
+> val it : {deptno:int, emp:{comm:real, deptno:int, empno:int, ename:string, hiredate:string, job:string, mgr:int, sal:real}} bag
 
 from deptno in [10, 20],
     emp in scott.emps on emp.deptno = deptno
@@ -1992,7 +1941,7 @@ end;
 >     40 OPERATIONS BOSTON
 >     20 RESEARCH   DALLAS   SOUTH
 >
-> val it : {elements:{deptno:int, dname:string, loc:string} bag, r:string} list
+> val it : {`elements`:{deptno:int, dname:string, loc:string} bag, r:string} list
 
 (* How many employees in each department? *)
 from e in scott.emps
@@ -2344,8 +2293,8 @@ fun analyzeResults (emps: {deptno: int, sal: real} bag) =
   end;
 > val analyzeResults = fn
 >   : {deptno:int, sal:real} bag
->     -> {averageSalary:real, classification:string,
->         employeeCount:int}
+>      -> {averageSalary:real, classification:string,
+>           employeeCount:int}
 
 (* Use the custom function to analyze employees in department 10. *)
 from e in scott.emps
@@ -2353,8 +2302,10 @@ from e in scott.emps
   yield {e.deptno, e.sal}
   into analyzeResults;
 > val it =
->   {averageSalary=2916.6667,classification="High",employeeCount=3}
->   : {averageSalary:real, classification:string, employeeCount:int}
+>   {averageSalary=2916.6667,classification="High",
+>    employeeCount=3}
+>   : {averageSalary:real, classification:string,
+>       employeeCount:int}
 
 (* Check whether all employees earn more than $2000. *)
 forall e in scott.emps

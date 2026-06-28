@@ -37,8 +37,10 @@ import static net.hydromatic.morel.Ml.assertError;
 import static net.hydromatic.morel.Ml.ml;
 import static net.hydromatic.morel.Ml.mlE;
 import static net.hydromatic.morel.TestUtils.first;
+import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.hasToString;
@@ -51,6 +53,7 @@ import java.io.InputStream;
 import java.io.PrintStream;
 import java.math.BigDecimal;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import net.hydromatic.morel.ast.Ast;
@@ -59,6 +62,7 @@ import net.hydromatic.morel.eval.Applicable1;
 import net.hydromatic.morel.eval.Codes;
 import net.hydromatic.morel.eval.Prop;
 import net.hydromatic.morel.foreign.ForeignValue;
+import net.hydromatic.morel.parse.MorelParseException;
 import net.hydromatic.morel.type.DataType;
 import net.hydromatic.morel.type.TypeVar;
 import org.hamcrest.CustomTypeSafeMatcher;
@@ -109,6 +113,50 @@ public class MainTest {
     assertThat(out, hasToString(expected));
   }
 
+  /**
+   * Tests the script-test harness's strict output matching ({@code
+   * matchStrict}). In the default lenient mode, output that differs from the
+   * expected output only in whitespace (here, spaces after commas in a list
+   * value) is accepted, and the expected text is preserved. In strict mode the
+   * difference is rejected, and the actual (canonical) output is emitted
+   * instead.
+   *
+   * <p>This cannot be tested from within a script: a script whose output
+   * matches passes whether or not strict mode is enabled.
+   */
+  @Test
+  void testScriptStrictMatch() {
+    final String input =
+        "[1, 2, 3];\n" //
+            + "> val it = [1, 2, 3] : int list\n";
+    // Lenient (default): the spaced expected output is preserved.
+    final String lenient = runIdempotent(input, false);
+    assertThat(lenient, containsString("> val it = [1, 2, 3] : int list"));
+    // Strict: the difference is rejected and the actual output is emitted.
+    final String strict = runIdempotent(input, true);
+    assertThat(strict, containsString("> val it = [1,2,3] : int list"));
+    assertThat(strict, not(containsString("> val it = [1, 2, 3]")));
+  }
+
+  /**
+   * Runs {@code input} through the idempotent (script-test) harness, with or
+   * without strict output matching, and returns the regenerated output.
+   */
+  private static String runIdempotent(String input, boolean strict) {
+    final List<String> argList = ImmutableList.of("--echo");
+    final Map<String, ForeignValue> valueMap = ImmutableMap.of();
+    final Map<Prop, Object> propMap = new LinkedHashMap<>();
+    if (strict) {
+      propMap.put(Prop.MATCH_STRICT, true);
+    }
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    try (PrintStream ps = new PrintStream(out)) {
+      final InputStream in = new ByteArrayInputStream(input.getBytes());
+      new Main(argList, in, ps, valueMap, propMap, true).run();
+    }
+    return out.toString();
+  }
+
   @Test
   void testParse() {
     ml("1").assertParseLiteral(isLiteral(BigDecimal.ONE, "1"));
@@ -122,9 +170,58 @@ public class MainTest {
     ml("#\"\\\"\"").assertParseLiteral(isLiteral('"', "#\"\\\"\""));
     ml("#\"\\\\\"").assertParseLiteral(isLiteral('\\', "#\"\\\\\""));
 
+    // word literals unparse in upper-case hexadecimal, prefixed "0wx"
+    ml("0wxAB").assertParse("0wxAB");
+    ml("0w171").assertParse("0wxAB");
+    ml("0wxab").assertParse("0wxAB");
+    ml("0w0").assertParse("0wx0");
+    ml("fn 0wxAB => 1 | _ => 2").assertParse("fn 0wxAB => 1 | _ => 2");
+
     // true and false are variables, not actually literals
     ml("true").assertParseStmt(Ast.Id.class, "true");
     ml("false").assertParseStmt(Ast.Id.class, "false");
+  }
+
+  /**
+   * Tests that a lexical error (here, a stray backslash) is reported as a parse
+   * exception with a position, rather than escaping as a {@code TokenMgrError}
+   * (which is an {@link Error}, not an {@link Exception}) and crashing the
+   * shell.
+   */
+  @Test
+  void testLexicalError() {
+    ml("1 \\ 2")
+        .assertParseThrows(
+            throwsA(
+                MorelParseException.class,
+                containsString("Lexical error at line 1, column 3")));
+  }
+
+  /**
+   * Tests that a lexical error is printed in the standard form &mdash; with a
+   * space between the position and the message &mdash; and does not crash the
+   * shell. Unlike {@link #testLexicalError}, this exercises the shell's output
+   * path (via {@link Main}), so it would catch a missing separator.
+   */
+  @Test
+  void testLexicalErrorOutput() {
+    final String ml = "1 \\ 2;\n";
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    try (PrintStream ps = new PrintStream(out)) {
+      final InputStream in = new ByteArrayInputStream(ml.getBytes());
+      final Main main =
+          new Main(
+              ImmutableList.of(),
+              in,
+              ps,
+              ImmutableMap.of(),
+              ImmutableMap.of(),
+              false);
+      main.run();
+    }
+    assertThat(
+        out.toString(),
+        containsString("stdIn:1.3-1.3 Lexical error at line 1, column 3"));
   }
 
   @Test
@@ -403,6 +500,10 @@ public class MainTest {
     ml("{e with deptno = 10, empno = 100}").assertParseSame();
     ml("{hd scott.emps with deptno = 10, empno = 100}")
         .assertParse("{hd (#emps scott) with deptno = 10, empno = 100}");
+
+    // safe navigation
+    ml("e?.deptno").assertParseSame();
+    ml("a?.b?.c").assertParseSame();
   }
 
   @Test
@@ -1081,8 +1182,8 @@ public class MainTest {
     // "fn (a, b, c) => (a + b) * 3 - c"
     final String plan =
         "match(v, tailApply(fnCode match((a, b, c), "
-            + "apply2(fnValue -, apply2(fnValue *, "
-            + "apply2(fnValue +, stack(offset 3, name a), stack(offset 2, name b)), "
+            + "apply2(fnValue Int.-, apply2(fnValue Int.*, "
+            + "apply2(fnValue Int.+, stack(offset 3, name a), stack(offset 2, name b)), "
             + "constant(3)), stack(offset 1, name c))), argCode stack(offset 1, name v)))";
     ml(ml)
         // g (4, 3, 2) = (4 + 3) * 3 - 2 = 19
@@ -1953,11 +2054,9 @@ public class MainTest {
     ml("from e in emps join d in depts where c").assertError("Xx");
     ml("from e in emps join d in depts on c")
         .assertParse("from e in emps, d in depts on c");
-    if ("TODO".isEmpty()) {
-      ml("from e in emps left join d in depts on c").assertParseSame();
-      ml("from e in emps right join d in depts on c").assertParseSame();
-      ml("from e in emps full join d in depts on c").assertParseSame();
-    }
+    ml("from e in emps left join d in depts on c").assertParseSame();
+    ml("from e in emps right join d in depts on c").assertParseSame();
+    ml("from e in emps full join d in depts on c").assertParseSame();
     ml("from e in (from z in emps), d in (from y in depts) on c")
         .assertParseSame();
     ml("from e in emps distinct").assertParseSame();
@@ -2878,7 +2977,7 @@ public class MainTest {
             + "sink group(key tuple(apply(fnValue nth:0, argCode stack(offset 1, name r))), "
             + "agg aggregate, "
             + "sink collect(tuple(get(name a), "
-            + "apply2(fnValue +, get(name a), get(name a)), "
+            + "apply2(fnValue Int.+, get(name a), get(name a)), "
             + "get(name sb))))))";
     ml(ml)
         .assertParse(expected)

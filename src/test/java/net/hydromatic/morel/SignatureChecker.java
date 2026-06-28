@@ -633,6 +633,8 @@ public class SignatureChecker {
         return "Bool";
       case "INTEGER":
         return "Int";
+      case "PP":
+        return "PP";
       default:
         return toPascalCase(bind.name.name);
     }
@@ -696,7 +698,7 @@ public class SignatureChecker {
 
   private static String alphaName(String signatureName) {
     switch (signatureName) {
-        // lint: sort until '#}' where '##case '
+        // lint: sort until '#}' where '#case '
       case "/":
         return "divide";
       case "^":
@@ -981,6 +983,7 @@ public class SignatureChecker {
             case "real":
             case "string":
             case "unit":
+            case "word":
               // The 'int' type is in a constant called 'INT'.
               return namedType.name.toUpperCase(Locale.ROOT);
             case "option":

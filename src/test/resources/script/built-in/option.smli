@@ -28,16 +28,17 @@ Sys.set ("stringDepth", ~1);
 
 Option;
 > val it =
->   {app=fn,compose=fn,composePartial=fn,filter=fn,getOpt=fn,isSome=fn,join=fn,
->    map=fn,mapPartial=fn,valOf=fn}
+>   {app=fn,compose=fn,composePartial=fn,filter=fn,getOpt=fn,isSome=fn,
+>    `join`=fn,map=fn,mapPartial=fn,valOf=fn}
 >   : {app:('a -> unit) -> 'a option -> unit,
->      compose:('b -> 'c) * ('d -> 'b option) -> 'd -> 'c option,
->      composePartial:('e -> 'f option) * ('g -> 'e option) -> 'g -> 'f option,
->      filter:('h -> bool) -> 'h -> 'h option, getOpt:'i option * 'i -> 'i,
->      isSome:'j option -> bool, join:'k option option -> 'k option,
->      map:('l -> 'm) -> 'l option -> 'm option,
->      mapPartial:('n -> 'o option) -> 'n option -> 'o option,
->      valOf:'p option -> 'p}
+>       compose:('b -> 'c) * ('d -> 'b option) -> 'd -> 'c option,
+>       composePartial:('e -> 'f option) * ('g -> 'e option)
+>                       -> 'g -> 'f option,
+>       filter:('h -> bool) -> 'h -> 'h option, getOpt:'i option * 'i -> 'i,
+>       isSome:'j option -> bool, `join`:'k option option -> 'k option,
+>       map:('l -> 'm) -> 'l option -> 'm option,
+>       mapPartial:('n -> 'o option) -> 'n option -> 'o option,
+>       valOf:'p option -> 'p}
 
 (*) val getOpt : 'a option * 'a -> 'a
 Option.getOpt (SOME 1, 2);
@@ -93,11 +94,11 @@ Option.filter (fn x => x mod 2 = 0) 2;
 > val it = SOME 2 : int option
 Sys.plan ();
 > val it =
->   "apply2(fnValue Option.filter, match(x, apply2(fnValue =, apply2(fnValue mod, stack(offset 1, name x), constant(2)), constant(0))), constant(2))"
+>   "apply2(fnValue Option.filter, match(x, apply2(fnValue =, apply2(fnValue Int.mod, stack(offset 1, name x), constant(2)), constant(0))), constant(2))"
 >   : string
 
-(*) val join : 'a option option -> 'a option
-(*) (The function name is quoted using backticks because 'join' is a keyword.)
+(* val join : 'a option option -> 'a option
+ * (The function name is quoted using backticks because 'join' is a keyword.) *)
 Option.`join` (SOME (SOME 1));
 > val it = SOME 1 : int option
 Option.`join` (SOME noneInt);

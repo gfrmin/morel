@@ -23,6 +23,7 @@ import static java.util.Objects.requireNonNull;
 import static net.hydromatic.morel.ast.CoreBuilder.core;
 import static net.hydromatic.morel.util.Ord.forEachIndexed;
 import static net.hydromatic.morel.util.Static.last;
+import static net.hydromatic.morel.util.Static.sort;
 import static net.hydromatic.morel.util.Static.transform;
 import static net.hydromatic.morel.util.Static.transformEager;
 
@@ -94,7 +95,7 @@ public class CalciteCompiler extends Compiler {
    */
   static final Map<BuiltIn, SqlOperator> UNARY_OPERATORS =
       ImmutableMap.<BuiltIn, SqlOperator>builder()
-          .put(BuiltIn.NOT, SqlStdOperatorTable.NOT)
+          .put(BuiltIn.BOOL_NOT, SqlStdOperatorTable.NOT)
           .put(BuiltIn.LIST_NULL, SqlStdOperatorTable.EXISTS)
           .put(BuiltIn.RELATIONAL_NON_EMPTY, SqlStdOperatorTable.EXISTS)
           .put(BuiltIn.RELATIONAL_EMPTY, SqlStdOperatorTable.EXISTS)
@@ -113,19 +114,21 @@ public class CalciteCompiler extends Compiler {
           .put(BuiltIn.OP_NEGATE, SqlStdOperatorTable.UNARY_MINUS)
           .put(BuiltIn.OP_ELEM, SqlStdOperatorTable.IN)
           .put(BuiltIn.OP_NOT_ELEM, SqlStdOperatorTable.NOT_IN)
-          .put(BuiltIn.Z_NEGATE_INT, SqlStdOperatorTable.UNARY_MINUS)
-          .put(BuiltIn.Z_NEGATE_REAL, SqlStdOperatorTable.UNARY_MINUS)
+          .put(BuiltIn.INT_OP_NEGATE, SqlStdOperatorTable.UNARY_MINUS)
+          .put(BuiltIn.REAL_OP_NEGATE, SqlStdOperatorTable.UNARY_MINUS)
           .put(BuiltIn.OP_PLUS, SqlStdOperatorTable.PLUS)
-          .put(BuiltIn.Z_PLUS_INT, SqlStdOperatorTable.PLUS)
-          .put(BuiltIn.Z_PLUS_REAL, SqlStdOperatorTable.PLUS)
+          .put(BuiltIn.INT_OP_PLUS, SqlStdOperatorTable.PLUS)
+          .put(BuiltIn.REAL_OP_PLUS, SqlStdOperatorTable.PLUS)
           .put(BuiltIn.OP_MINUS, SqlStdOperatorTable.MINUS)
-          .put(BuiltIn.Z_MINUS_INT, SqlStdOperatorTable.MINUS)
-          .put(BuiltIn.Z_MINUS_REAL, SqlStdOperatorTable.MINUS)
+          .put(BuiltIn.INT_OP_MINUS, SqlStdOperatorTable.MINUS)
+          .put(BuiltIn.REAL_OP_MINUS, SqlStdOperatorTable.MINUS)
           .put(BuiltIn.OP_TIMES, SqlStdOperatorTable.MULTIPLY)
-          .put(BuiltIn.Z_TIMES_INT, SqlStdOperatorTable.MULTIPLY)
-          .put(BuiltIn.Z_TIMES_REAL, SqlStdOperatorTable.MULTIPLY)
+          .put(BuiltIn.INT_OP_TIMES, SqlStdOperatorTable.MULTIPLY)
+          .put(BuiltIn.REAL_OP_TIMES, SqlStdOperatorTable.MULTIPLY)
           .put(BuiltIn.OP_DIV, SqlStdOperatorTable.DIVIDE)
+          .put(BuiltIn.INT_DIV, SqlStdOperatorTable.DIVIDE)
           .put(BuiltIn.OP_MOD, SqlStdOperatorTable.MOD)
+          .put(BuiltIn.INT_MOD, SqlStdOperatorTable.MOD)
           .put(BuiltIn.Z_ANDALSO, SqlStdOperatorTable.AND)
           .put(BuiltIn.Z_ORELSE, SqlStdOperatorTable.OR)
           .build();
@@ -960,8 +963,7 @@ public class CalciteCompiler extends Compiler {
   private static RelContext getRelContext(
       RelContext cx, Environment env, List<String> names) {
     // Permute the fields so that they are sorted by name, per Morel records.
-    final List<String> sortedNames =
-        Ordering.natural().immutableSortedCopy(names);
+    final List<String> sortedNames = sort(names, Ordering.natural());
     cx.relBuilder.rename(names).project(cx.relBuilder.fields(sortedNames));
     final RelDataType rowType = cx.relBuilder.peek().getRowType();
     final SortedMap<String, VarData> map = new TreeMap<>();

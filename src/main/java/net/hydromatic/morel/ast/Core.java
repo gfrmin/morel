@@ -37,6 +37,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
+import com.google.common.primitives.UnsignedLong;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
@@ -144,6 +145,12 @@ public class Core {
             public AstWriter id(String name, int i) {
               int j = describer.register(name, i);
               return super.id(name, j);
+            }
+
+            @Override
+            public AstWriter idQuoted(String name, int i) {
+              int j = describer.register(name, i);
+              return super.idQuoted(name, j);
             }
           };
       return unparse(w);
@@ -256,7 +263,7 @@ public class Core {
 
     @Override
     AstWriter unparse(AstWriter w, int left, int right) {
-      return w.id(name, i);
+      return w.idQuoted(name, i);
     }
 
     @Override
@@ -302,7 +309,8 @@ public class Core {
               || op == Op.CHAR_LITERAL_PAT
               || op == Op.INT_LITERAL_PAT
               || op == Op.REAL_LITERAL_PAT
-              || op == Op.STRING_LITERAL_PAT);
+              || op == Op.STRING_LITERAL_PAT
+              || op == Op.WORD_LITERAL_PAT);
     }
 
     @Override
@@ -319,6 +327,10 @@ public class Core {
 
     @Override
     AstWriter unparse(AstWriter w, int left, int right) {
+      if (op == Op.WORD_LITERAL_PAT) {
+        return w.appendLiteral(
+            UnsignedLong.valueOf(((BigDecimal) value).toBigIntegerExact()));
+      }
       return w.appendLiteral(value);
     }
 
@@ -708,10 +720,10 @@ public class Core {
 
     /**
      * Returns the {@link BuiltIn} that this is a call to, or {@link
-     * BuiltIn#FALSE} if not a call.
+     * BuiltIn#Z_VOID} if not a call.
      */
     public BuiltIn builtIn() {
-      return BuiltIn.FALSE;
+      return BuiltIn.Z_VOID;
     }
 
     /** Returns whether this expression is a call to the given built-in. */
@@ -795,7 +807,7 @@ public class Core {
 
     @Override
     AstWriter unparse(AstWriter w, int left, int right) {
-      return w.id(idPat.name, idPat.i);
+      return w.idQuoted(idPat.name, idPat.i);
     }
   }
 
@@ -896,6 +908,10 @@ public class Core {
           v = number.byteValue();
         } else if (clazz == BigInteger.class && number instanceof BigDecimal) {
           v = ((BigDecimal) number).toBigIntegerExact();
+        } else if (clazz == UnsignedLong.class
+            && number instanceof BigDecimal) {
+          // Throws if the value is negative or exceeds 2^64 - 1.
+          v = UnsignedLong.valueOf(((BigDecimal) number).toBigIntegerExact());
         } else {
           v = value;
         }
@@ -991,6 +1007,8 @@ public class Core {
         case INTERNAL_LITERAL:
           // Print the value as if it were a string.
           return w.appendLiteral(((Wrapper) value).o.toString());
+        case WORD_LITERAL:
+          return w.appendLiteral(unwrap(UnsignedLong.class));
       }
       return w.appendLiteral(value);
     }
@@ -1763,10 +1781,9 @@ public class Core {
     public final Exp exp;
     public final Exp condition;
 
-    Scan(StepEnv env, Pat pat, Exp exp, Exp condition) {
-      super(
-          Op.SCAN,
-          env.withOrdered(env.ordered && exp.type instanceof ListType));
+    Scan(Op op, StepEnv env, Pat pat, Exp exp, Exp condition) {
+      super(op, env.withOrdered(env.ordered && exp.type instanceof ListType));
+      checkArgument(op.isJoin(), "not a join: %s", op);
       this.pat = requireNonNull(pat, "pat");
       this.exp = requireNonNull(exp, "exp");
       this.condition = requireNonNull(condition, "condition");
@@ -1808,7 +1825,21 @@ public class Core {
     @Override
     protected AstWriter unparseStep(
         AstWriter w, int ordinal, int left, int right) {
-      w.append(ordinal == 0 ? " " : " join ")
+      final String keyword;
+      switch (op) {
+        case LEFT_JOIN:
+          keyword = " left join ";
+          break;
+        case RIGHT_JOIN:
+          keyword = " right join ";
+          break;
+        case FULL_JOIN:
+          keyword = " full join ";
+          break;
+        default:
+          keyword = ordinal == 0 ? " " : " join ";
+      }
+      w.append(keyword)
           // for these purposes 'in' has same precedence as '='
           .append(pat, 0, Op.EQ.left);
       if (Extents.isInfinite(exp)) {
@@ -1829,7 +1860,7 @@ public class Core {
               && condition == this.condition
               && env.equals(this.env)
           ? this
-          : core.scan(env, pat, exp, condition);
+          : core.scan(op, env, pat, exp, condition);
     }
   }
 
@@ -2288,7 +2319,7 @@ public class Core {
           }
 
           // Convert built-ins to infix operators.
-          final Op op = Resolver.BUILT_IN_OP_MAP.get(builtIn);
+          final Op op = Resolver.toOp(builtIn);
           if (op != null) {
             return w.infix(left, args().get(0), op, args().get(1), right);
           }

@@ -37,9 +37,6 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
 import com.google.common.primitives.Chars;
 import java.io.StringReader;
-import java.math.BigDecimal;
-import java.math.MathContext;
-import java.math.RoundingMode;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -89,6 +86,7 @@ import net.hydromatic.morel.type.Type;
 import net.hydromatic.morel.type.TypeSystem;
 import net.hydromatic.morel.util.ImmutablePairList;
 import net.hydromatic.morel.util.JavaVersion;
+import net.hydromatic.morel.util.Lindig;
 import net.hydromatic.morel.util.MapList;
 import net.hydromatic.morel.util.MorelException;
 import net.hydromatic.morel.util.Ord;
@@ -101,7 +99,7 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 @SuppressWarnings({"rawtypes", "unchecked"})
 public abstract class Codes {
   /** Converts a {@code float} to a String per the JDK. */
-  private static final Function<Float, String> FLOAT_TO_STRING =
+  static final Function<Float, String> FLOAT_TO_STRING =
       JavaVersion.CURRENT.compareTo(JavaVersion.of(19)) >= 0
           ? f -> Float.toString(f)
           : Codes::floatToString0;
@@ -148,7 +146,10 @@ public abstract class Codes {
           case REAL:
             return core.functionLiteral(typeSystem, BuiltIn.REAL_ABS);
           default:
-            throw new AssertionError("bad type " + argType);
+            throw new CompileException(
+                "operator not defined for type '" + argType + "'",
+                false,
+                Pos.ZERO);
         }
       };
 
@@ -211,6 +212,10 @@ public abstract class Codes {
   /** @see BuiltIn#BAG_NULL */
   private static final Applicable1 BAG_NULL = empty(BuiltIn.BAG_NULL);
 
+  /** @see BuiltIn#BAG_ONLY */
+  private static final Applicable BAG_ONLY =
+      new RelationalOnly(BuiltIn.BAG_ONLY, Pos.ZERO);
+
   /** @see BuiltIn#BAG_PARTITION */
   private static final Applicable2 BAG_PARTITION =
       listPartition0(BuiltIn.BAG_PARTITION);
@@ -230,6 +235,15 @@ public abstract class Codes {
   /** @see BuiltIn#BAG_TO_LIST */
   private static final Applicable1 BAG_TO_LIST = identity(BuiltIn.BAG_TO_LIST);
 
+  /** @see BuiltIn#BOOL_ANDALSO */
+  private static final Applicable2 BOOL_ANDALSO =
+      new BaseApplicable2<Boolean, Boolean, Boolean>(BuiltIn.BOOL_ANDALSO) {
+        @Override
+        public Boolean apply(Boolean a0, Boolean a1) {
+          return a0 && a1;
+        }
+      };
+
   /** @see BuiltIn#BOOL_FROM_STRING */
   private static final Applicable BOOL_FROM_STRING =
       new BaseApplicable1<List, String>(BuiltIn.BOOL_FROM_STRING) {
@@ -245,12 +259,66 @@ public abstract class Codes {
         }
       };
 
+  /** @see BuiltIn#BOOL_IMPLIES */
+  private static final Applicable2 BOOL_IMPLIES =
+      new BaseApplicable2<Boolean, Boolean, Boolean>(BuiltIn.BOOL_IMPLIES) {
+        @Override
+        public Boolean apply(Boolean a0, Boolean a1) {
+          return !a0 || a1;
+        }
+      };
+
   /** @see BuiltIn#BOOL_NOT */
   private static final Applicable BOOL_NOT =
       new BaseApplicable1<Boolean, Boolean>(BuiltIn.BOOL_NOT) {
         @Override
         public Boolean apply(Boolean b) {
           return !b;
+        }
+      };
+
+  /** @see BuiltIn#BOOL_OP_EQ */
+  private static final Applicable2 BOOL_OP_EQ =
+      new BaseApplicable2<Boolean, Boolean, Boolean>(BuiltIn.BOOL_OP_EQ) {
+        @Override
+        public Boolean apply(Boolean a0, Boolean a1) {
+          return a0.equals(a1);
+        }
+      };
+
+  /** @see BuiltIn#BOOL_OP_GT */
+  private static final Applicable2 BOOL_OP_GT =
+      new BaseApplicable2<Boolean, Boolean, Boolean>(BuiltIn.BOOL_OP_GT) {
+        @Override
+        public Boolean apply(Boolean a0, Boolean a1) {
+          return a0 && !a1;
+        }
+      };
+
+  /** @see BuiltIn#BOOL_OP_LT */
+  private static final Applicable2 BOOL_OP_LT =
+      new BaseApplicable2<Boolean, Boolean, Boolean>(BuiltIn.BOOL_OP_LT) {
+        @Override
+        public Boolean apply(Boolean a0, Boolean a1) {
+          return !a0 && a1;
+        }
+      };
+
+  /** @see BuiltIn#BOOL_OP_NE */
+  private static final Applicable2 BOOL_OP_NE =
+      new BaseApplicable2<Boolean, Boolean, Boolean>(BuiltIn.BOOL_OP_NE) {
+        @Override
+        public Boolean apply(Boolean a0, Boolean a1) {
+          return !a0.equals(a1);
+        }
+      };
+
+  /** @see BuiltIn#BOOL_ORELSE */
+  private static final Applicable2 BOOL_ORELSE =
+      new BaseApplicable2<Boolean, Boolean, Boolean>(BuiltIn.BOOL_ORELSE) {
+        @Override
+        public Boolean apply(Boolean a0, Boolean a1) {
+          return a0 || a1;
         }
       };
 
@@ -328,6 +396,18 @@ public abstract class Codes {
         }
       };
 
+  /** @see BuiltIn#CHAR_FROM_INT */
+  private static final Applicable CHAR_FROM_INT =
+      new BaseApplicable1<List, Integer>(BuiltIn.CHAR_FROM_INT) {
+        @Override
+        public List apply(Integer ord) {
+          if (ord < 0 || ord > 255) {
+            return OPTION_NONE;
+          }
+          return optionSome((char) ord.intValue());
+        }
+      };
+
   /** @see BuiltIn#CHAR_FROM_STRING */
   private static final Applicable CHAR_FROM_STRING =
       new BaseApplicable1<List, String>(BuiltIn.CHAR_FROM_STRING) {
@@ -370,6 +450,10 @@ public abstract class Codes {
   private static final Applicable CHAR_IS_LOWER =
       new CharPredicate(BuiltIn.CHAR_IS_LOWER, CharPredicate::isLower);
 
+  /** @see BuiltIn#CHAR_IS_OCT_DIGIT */
+  private static final Applicable CHAR_IS_OCT_DIGIT =
+      new CharPredicate(BuiltIn.CHAR_IS_OCT_DIGIT, CharPredicate::isOctDigit);
+
   /** @see BuiltIn#CHAR_IS_PRINT */
   private static final Applicable CHAR_IS_PRINT =
       new CharPredicate(BuiltIn.CHAR_IS_PRINT, CharPredicate::isPrint);
@@ -398,6 +482,15 @@ public abstract class Codes {
   /** @see BuiltIn#CHAR_NOT_CONTAINS */
   private static final Applicable2 CHAR_NOT_CONTAINS =
       charContains(BuiltIn.CHAR_NOT_CONTAINS);
+
+  /** @see BuiltIn#CHAR_OP_EQ */
+  private static final Applicable2 CHAR_OP_EQ =
+      new BaseApplicable2<Boolean, Character, Character>(BuiltIn.CHAR_OP_EQ) {
+        @Override
+        public Boolean apply(Character a0, Character a1) {
+          return a0.equals(a1);
+        }
+      };
 
   /** @see BuiltIn#CHAR_OP_GE */
   private static final Applicable2 CHAR_OP_GE =
@@ -432,6 +525,15 @@ public abstract class Codes {
         @Override
         public Boolean apply(Character a0, Character a1) {
           return a0 < a1;
+        }
+      };
+
+  /** @see BuiltIn#CHAR_OP_NE */
+  private static final Applicable2 CHAR_OP_NE =
+      new BaseApplicable2<Boolean, Character, Character>(BuiltIn.CHAR_OP_NE) {
+        @Override
+        public Boolean apply(Character a0, Character a1) {
+          return !a0.equals(a1);
         }
       };
 
@@ -1300,19 +1402,29 @@ public abstract class Codes {
 
   /** @see BuiltIn#GENERAL_EXN_MESSAGE */
   private static final Applicable GENERAL_EXN_MESSAGE =
-      new BaseApplicable1<String, BuiltInExn>(BuiltIn.GENERAL_EXN_MESSAGE) {
+      new BaseApplicable1<String, List>(BuiltIn.GENERAL_EXN_MESSAGE) {
         @Override
-        public String apply(BuiltInExn arg) {
-          return arg.mlName();
+        public String apply(List arg) {
+          // An exception value is a tagged list whose first element is the
+          // constructor name; built-in exceptions may have a description.
+          final String name = (String) arg.get(0);
+          final BuiltInExn exn = BuiltInExn.forMlName(name);
+          if (exn != null && exn.description != null) {
+            return exn.description;
+          }
+          if (arg.size() > 1) {
+            return name + ": " + arg.get(1);
+          }
+          return name;
         }
       };
 
   /** @see BuiltIn#GENERAL_EXN_NAME */
   private static final Applicable GENERAL_EXN_NAME =
-      new BaseApplicable1<String, BuiltInExn>(BuiltIn.GENERAL_EXN_NAME) {
+      new BaseApplicable1<String, List>(BuiltIn.GENERAL_EXN_NAME) {
         @Override
-        public String apply(BuiltInExn arg) {
-          return arg.structure + "." + arg.mlName();
+        public String apply(List arg) {
+          return (String) arg.get(0);
         }
       };
 
@@ -1383,25 +1495,10 @@ public abstract class Codes {
       new BaseApplicable2<String, List, Integer>(BuiltIn.INT_FMT) {
         @Override
         public String apply(List radix, Integer i) {
-          final int base;
-          switch ((String) radix.get(0)) {
-            case "BIN":
-              base = 2;
-              break;
-            case "OCT":
-              base = 8;
-              break;
-            case "DEC":
-              base = 10;
-              break;
-            case "HEX":
-              base = 16;
-              break;
-            default:
-              throw new AssertionError(radix);
-          }
           // Use upper-case digits A..F for hex, prefix '-' with '~'.
-          final String s = Integer.toString(i, base).toUpperCase(Locale.ROOT);
+          final String s =
+              Integer.toString(i, Radix.of(radix).base)
+                  .toUpperCase(Locale.ROOT);
           return s.startsWith("-") ? "~" + s.substring(1) : s;
         }
       };
@@ -1454,7 +1551,7 @@ public abstract class Codes {
   /** @see BuiltIn#INT_MIN_INT */
   private static final List INT_MIN_INT = optionSome(Integer.MIN_VALUE);
 
-  /** Implements {@link #INT_DIV} and {@link #OP_DIV}. */
+  /** Implements {@link #INT_DIV}. */
   private static class IntDiv
       extends BaseApplicable2<Integer, Integer, Integer> {
     IntDiv(BuiltIn builtIn) {
@@ -1470,7 +1567,7 @@ public abstract class Codes {
   /** @see BuiltIn#INT_MOD */
   private static final Applicable2 INT_MOD = new IntMod(BuiltIn.INT_MOD);
 
-  /** Implements {@link #INT_MOD} and {@link #OP_MOD}. */
+  /** Implements {@link #INT_MOD}. */
   private static class IntMod
       extends BaseApplicable2<Integer, Integer, Integer> {
     IntMod(BuiltIn builtIn) {
@@ -1482,6 +1579,78 @@ public abstract class Codes {
       return Math.floorMod(a0, a1);
     }
   }
+
+  /** @see BuiltIn#INT_OP_GE */
+  private static final Applicable2 INT_OP_GE =
+      new BaseApplicable2<Boolean, Integer, Integer>(BuiltIn.INT_OP_GE) {
+        @Override
+        public Boolean apply(Integer a0, Integer a1) {
+          return a0 >= a1;
+        }
+      };
+
+  /** @see BuiltIn#INT_OP_GT */
+  private static final Applicable2 INT_OP_GT =
+      new BaseApplicable2<Boolean, Integer, Integer>(BuiltIn.INT_OP_GT) {
+        @Override
+        public Boolean apply(Integer a0, Integer a1) {
+          return a0 > a1;
+        }
+      };
+
+  /** @see BuiltIn#INT_OP_LE */
+  private static final Applicable2 INT_OP_LE =
+      new BaseApplicable2<Boolean, Integer, Integer>(BuiltIn.INT_OP_LE) {
+        @Override
+        public Boolean apply(Integer a0, Integer a1) {
+          return a0 <= a1;
+        }
+      };
+
+  /** @see BuiltIn#INT_OP_LT */
+  private static final Applicable2 INT_OP_LT =
+      new BaseApplicable2<Boolean, Integer, Integer>(BuiltIn.INT_OP_LT) {
+        @Override
+        public Boolean apply(Integer a0, Integer a1) {
+          return a0 < a1;
+        }
+      };
+
+  /** @see BuiltIn#INT_OP_MINUS */
+  private static final Applicable2 INT_OP_MINUS =
+      new BaseApplicable2<Integer, Integer, Integer>(BuiltIn.INT_OP_MINUS) {
+        @Override
+        public Integer apply(Integer a0, Integer a1) {
+          return a0 - a1;
+        }
+      };
+
+  /** @see BuiltIn#INT_OP_NEGATE */
+  private static final Applicable1 INT_OP_NEGATE =
+      new BaseApplicable1<Integer, Integer>(BuiltIn.INT_OP_NEGATE) {
+        @Override
+        public Integer apply(Integer i) {
+          return -i;
+        }
+      };
+
+  /** @see BuiltIn#INT_OP_PLUS */
+  private static final Applicable2 INT_OP_PLUS =
+      new BaseApplicable2<Integer, Integer, Integer>(BuiltIn.INT_OP_PLUS) {
+        @Override
+        public Integer apply(Integer a0, Integer a1) {
+          return a0 + a1;
+        }
+      };
+
+  /** @see BuiltIn#INT_OP_TIMES */
+  private static final Applicable2 INT_OP_TIMES =
+      new BaseApplicable2<Integer, Integer, Integer>(BuiltIn.INT_OP_TIMES) {
+        @Override
+        public Integer apply(Integer a0, Integer a1) {
+          return a0 * a1;
+        }
+      };
 
   /** @see BuiltIn#INT_PRECISION */
   private static final List INT_PRECISION = optionSome(32); // Java int 32 bits
@@ -2040,6 +2209,10 @@ public abstract class Codes {
   /** @see BuiltIn#LIST_NULL */
   private static final Applicable1 LIST_NULL = empty(BuiltIn.LIST_NULL);
 
+  /** @see BuiltIn#LIST_ONLY */
+  private static final Applicable LIST_ONLY =
+      new RelationalOnly(BuiltIn.LIST_ONLY, Pos.ZERO);
+
   /** @see BuiltIn#LIST_PAIR_ALL */
   private static final Applicable2 LIST_PAIR_ALL =
       listPairAll(BuiltIn.LIST_PAIR_ALL, false);
@@ -2542,24 +2715,6 @@ public abstract class Codes {
         }
       };
 
-  /** An applicable that negates a boolean value. */
-  private static final Applicable NOT =
-      new BaseApplicable1<Boolean, Boolean>(BuiltIn.NOT) {
-        @Override
-        public Boolean apply(Boolean b) {
-          return !(Boolean) b;
-        }
-      };
-
-  /** @see BuiltIn#OP_CARET */
-  private static final Applicable2 OP_CARET =
-      new BaseApplicable2<String, String, String>(BuiltIn.OP_CARET) {
-        @Override
-        public String apply(String a0, String a1) {
-          return a0 + a1;
-        }
-      };
-
   /** @see BuiltIn#OP_CONS */
   private static final Applicable2 OP_CONS =
       new BaseApplicable2<List, Object, Iterable>(BuiltIn.OP_CONS) {
@@ -2570,7 +2725,21 @@ public abstract class Codes {
       };
 
   /** @see BuiltIn#OP_DIV */
-  private static final Applicable2 OP_DIV = new IntDiv(BuiltIn.OP_DIV);
+  private static final Macro OP_DIV =
+      (typeSystem, env, argType) -> {
+        final Type resultType = ((TupleType) argType).argTypes.get(0);
+        switch ((PrimitiveType) resultType) {
+          case INT:
+            return core.functionLiteral(typeSystem, BuiltIn.INT_DIV);
+          case WORD:
+            return core.functionLiteral(typeSystem, BuiltIn.WORD_DIV);
+          default:
+            throw new CompileException(
+                "operator not defined for type '" + argType + "'",
+                false,
+                Pos.ZERO);
+        }
+      };
 
   /** @see BuiltIn#OP_ELEM */
   private static final Applicable2 OP_ELEM =
@@ -2648,16 +2817,35 @@ public abstract class Codes {
         final Type resultType = ((TupleType) argType).argTypes.get(0);
         switch ((PrimitiveType) resultType) {
           case INT:
-            return core.functionLiteral(typeSystem, BuiltIn.Z_MINUS_INT);
+            return core.functionLiteral(typeSystem, BuiltIn.INT_OP_MINUS);
           case REAL:
-            return core.functionLiteral(typeSystem, BuiltIn.Z_MINUS_REAL);
+            return core.functionLiteral(typeSystem, BuiltIn.REAL_OP_MINUS);
+          case WORD:
+            return core.functionLiteral(typeSystem, BuiltIn.WORD_OP_MINUS);
           default:
-            throw new AssertionError("bad type " + argType);
+            throw new CompileException(
+                "operator not defined for type '" + argType + "'",
+                false,
+                Pos.ZERO);
         }
       };
 
   /** @see BuiltIn#OP_MOD */
-  private static final Applicable2 OP_MOD = new IntMod(BuiltIn.OP_MOD);
+  private static final Macro OP_MOD =
+      (typeSystem, env, argType) -> {
+        final Type resultType = ((TupleType) argType).argTypes.get(0);
+        switch ((PrimitiveType) resultType) {
+          case INT:
+            return core.functionLiteral(typeSystem, BuiltIn.INT_MOD);
+          case WORD:
+            return core.functionLiteral(typeSystem, BuiltIn.WORD_MOD);
+          default:
+            throw new CompileException(
+                "operator not defined for type '" + argType + "'",
+                false,
+                Pos.ZERO);
+        }
+      };
 
   /** @see BuiltIn#OP_NE */
   private static final Applicable2 OP_NE =
@@ -2673,11 +2861,16 @@ public abstract class Codes {
       (typeSystem, env, argType) -> {
         switch ((PrimitiveType) argType) {
           case INT:
-            return core.functionLiteral(typeSystem, BuiltIn.Z_NEGATE_INT);
+            return core.functionLiteral(typeSystem, BuiltIn.INT_OP_NEGATE);
           case REAL:
-            return core.functionLiteral(typeSystem, BuiltIn.Z_NEGATE_REAL);
+            return core.functionLiteral(typeSystem, BuiltIn.REAL_OP_NEGATE);
+          case WORD:
+            return core.functionLiteral(typeSystem, BuiltIn.WORD_OP_NEGATE);
           default:
-            throw new AssertionError("bad type " + argType);
+            throw new CompileException(
+                "operator not defined for type '" + argType + "'",
+                false,
+                Pos.ZERO);
         }
       };
 
@@ -2696,11 +2889,16 @@ public abstract class Codes {
         final Type resultType = ((TupleType) argType).argTypes.get(0);
         switch ((PrimitiveType) resultType) {
           case INT:
-            return core.functionLiteral(typeSystem, BuiltIn.Z_PLUS_INT);
+            return core.functionLiteral(typeSystem, BuiltIn.INT_OP_PLUS);
           case REAL:
-            return core.functionLiteral(typeSystem, BuiltIn.Z_PLUS_REAL);
+            return core.functionLiteral(typeSystem, BuiltIn.REAL_OP_PLUS);
+          case WORD:
+            return core.functionLiteral(typeSystem, BuiltIn.WORD_OP_PLUS);
           default:
-            throw new AssertionError("bad type " + argType);
+            throw new CompileException(
+                "operator not defined for type '" + argType + "'",
+                false,
+                Pos.ZERO);
         }
       };
 
@@ -2710,11 +2908,16 @@ public abstract class Codes {
         final Type resultType = ((TupleType) argType).argTypes.get(0);
         switch ((PrimitiveType) resultType) {
           case INT:
-            return core.functionLiteral(typeSystem, BuiltIn.Z_TIMES_INT);
+            return core.functionLiteral(typeSystem, BuiltIn.INT_OP_TIMES);
           case REAL:
-            return core.functionLiteral(typeSystem, BuiltIn.Z_TIMES_REAL);
+            return core.functionLiteral(typeSystem, BuiltIn.REAL_OP_TIMES);
+          case WORD:
+            return core.functionLiteral(typeSystem, BuiltIn.WORD_OP_TIMES);
           default:
-            throw new AssertionError("bad type " + argType);
+            throw new CompileException(
+                "operator not defined for type '" + argType + "'",
+                false,
+                Pos.ZERO);
         }
       };
 
@@ -2912,6 +3115,218 @@ public abstract class Codes {
     }
     return ORDER_EQUAL;
   }
+
+  /** @see BuiltIn#PP_ALIGN */
+  private static final Applicable PP_ALIGN =
+      new BaseApplicable1<Lindig.Doc, Lindig.Doc>(BuiltIn.PP_ALIGN) {
+        @Override
+        public Lindig.Doc apply(Lindig.Doc doc) {
+          return Lindig.align(doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_BESIDE */
+  private static final Applicable PP_BESIDE =
+      new BaseApplicable2<Lindig.Doc, Lindig.Doc, Lindig.Doc>(
+          BuiltIn.PP_BESIDE) {
+        @Override
+        public Lindig.Doc apply(Lindig.Doc a, Lindig.Doc b) {
+          return Lindig.beside(a, b);
+        }
+      };
+
+  /** @see BuiltIn#PP_BRACES */
+  private static final Applicable PP_BRACES =
+      new BaseApplicable1<Lindig.Doc, Lindig.Doc>(BuiltIn.PP_BRACES) {
+        @Override
+        public Lindig.Doc apply(Lindig.Doc doc) {
+          return Lindig.braces(doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_BRACKETS */
+  private static final Applicable PP_BRACKETS =
+      new BaseApplicable1<Lindig.Doc, Lindig.Doc>(BuiltIn.PP_BRACKETS) {
+        @Override
+        public Lindig.Doc apply(Lindig.Doc doc) {
+          return Lindig.brackets(doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_CAT */
+  private static final Applicable PP_CAT =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_CAT) {
+        @Override
+        public Lindig.Doc apply(List docs) {
+          return Lindig.cat(docs);
+        }
+      };
+
+  /** @see BuiltIn#PP_EMPTY */
+  private static final Lindig.Doc PP_EMPTY = Lindig.EMPTY;
+
+  /** @see BuiltIn#PP_ENCLOSE_SEP */
+  private static final Applicable PP_ENCLOSE_SEP =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_ENCLOSE_SEP) {
+        @Override
+        public Lindig.Doc apply(List args) {
+          return Lindig.encloseSep(
+              (Lindig.Doc) args.get(0),
+              (Lindig.Doc) args.get(1),
+              (Lindig.Doc) args.get(2),
+              (List) args.get(3));
+        }
+      };
+
+  /** @see BuiltIn#PP_FILL_CAT */
+  private static final Applicable PP_FILL_CAT =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_FILL_CAT) {
+        @Override
+        public Lindig.Doc apply(List docs) {
+          return Lindig.fillCat(docs);
+        }
+      };
+
+  /** @see BuiltIn#PP_FILL_SEP */
+  private static final Applicable PP_FILL_SEP =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_FILL_SEP) {
+        @Override
+        public Lindig.Doc apply(List docs) {
+          return Lindig.fillSep(docs);
+        }
+      };
+
+  /** @see BuiltIn#PP_GROUP */
+  private static final Applicable PP_GROUP =
+      new BaseApplicable1<Lindig.Doc, Lindig.Doc>(BuiltIn.PP_GROUP) {
+        @Override
+        public Lindig.Doc apply(Lindig.Doc doc) {
+          return Lindig.group(doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_HANG */
+  private static final Applicable PP_HANG =
+      new BaseApplicable2<Lindig.Doc, Integer, Lindig.Doc>(BuiltIn.PP_HANG) {
+        @Override
+        public Lindig.Doc apply(Integer indent, Lindig.Doc doc) {
+          return Lindig.hang(indent, doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_HARD_LINE */
+  private static final Lindig.Doc PP_HARD_LINE = Lindig.HARD_LINE;
+
+  /** @see BuiltIn#PP_HCAT */
+  private static final Applicable PP_HCAT =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_HCAT) {
+        @Override
+        public Lindig.Doc apply(List docs) {
+          return Lindig.hcat(docs);
+        }
+      };
+
+  /** @see BuiltIn#PP_HSEP */
+  private static final Applicable PP_HSEP =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_HSEP) {
+        @Override
+        public Lindig.Doc apply(List docs) {
+          return Lindig.hsep(docs);
+        }
+      };
+
+  /** @see BuiltIn#PP_INDENT */
+  private static final Applicable PP_INDENT =
+      new BaseApplicable2<Lindig.Doc, Integer, Lindig.Doc>(BuiltIn.PP_INDENT) {
+        @Override
+        public Lindig.Doc apply(Integer indent, Lindig.Doc doc) {
+          return Lindig.indent(indent, doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_LINE */
+  private static final Lindig.Doc PP_LINE = Lindig.LINE;
+
+  /** @see BuiltIn#PP_LINE_BREAK */
+  private static final Lindig.Doc PP_LINE_BREAK = Lindig.LINE_BREAK;
+
+  /** @see BuiltIn#PP_NEST */
+  private static final Applicable PP_NEST =
+      new BaseApplicable2<Lindig.Doc, Integer, Lindig.Doc>(BuiltIn.PP_NEST) {
+        @Override
+        public Lindig.Doc apply(Integer indent, Lindig.Doc doc) {
+          return Lindig.nest(indent, doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_PARENS */
+  private static final Applicable PP_PARENS =
+      new BaseApplicable1<Lindig.Doc, Lindig.Doc>(BuiltIn.PP_PARENS) {
+        @Override
+        public Lindig.Doc apply(Lindig.Doc doc) {
+          return Lindig.parens(doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_PUNCTUATE */
+  private static final Applicable PP_PUNCTUATE =
+      new BaseApplicable2<List, Lindig.Doc, List>(BuiltIn.PP_PUNCTUATE) {
+        @Override
+        public List apply(Lindig.Doc separator, List docs) {
+          return Lindig.punctuate(separator, docs);
+        }
+      };
+
+  /** @see BuiltIn#PP_RENDER */
+  private static final Applicable PP_RENDER =
+      new BaseApplicable2<String, Integer, Lindig.Doc>(BuiltIn.PP_RENDER) {
+        @Override
+        public String apply(Integer width, Lindig.Doc doc) {
+          return Lindig.render(width, doc);
+        }
+      };
+
+  /** @see BuiltIn#PP_SEP */
+  private static final Applicable PP_SEP =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_SEP) {
+        @Override
+        public Lindig.Doc apply(List docs) {
+          return Lindig.sep(docs);
+        }
+      };
+
+  /** @see BuiltIn#PP_SOFT_BREAK */
+  private static final Lindig.Doc PP_SOFT_BREAK = Lindig.SOFT_BREAK;
+
+  /** @see BuiltIn#PP_SOFT_LINE */
+  private static final Lindig.Doc PP_SOFT_LINE = Lindig.SOFT_LINE;
+
+  /** @see BuiltIn#PP_TEXT */
+  private static final Applicable PP_TEXT =
+      new BaseApplicable1<Lindig.Doc, String>(BuiltIn.PP_TEXT) {
+        @Override
+        public Lindig.Doc apply(String s) {
+          return Lindig.text(s);
+        }
+      };
+
+  /** @see BuiltIn#PP_VCAT */
+  private static final Applicable PP_VCAT =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_VCAT) {
+        @Override
+        public Lindig.Doc apply(List docs) {
+          return Lindig.vcat(docs);
+        }
+      };
+
+  /** @see BuiltIn#PP_VSEP */
+  private static final Applicable PP_VSEP =
+      new BaseApplicable1<Lindig.Doc, List>(BuiltIn.PP_VSEP) {
+        @Override
+        public Lindig.Doc apply(List docs) {
+          return Lindig.vsep(docs);
+        }
+      };
 
   /** @see BuiltIn#RANGE_CONTAINS */
   private static final Applicable RANGE_CONTAINS =
@@ -3112,7 +3527,7 @@ public abstract class Codes {
 
     @Override
     public String apply(List spec, Float r) {
-      return format(parseSpec(spec), r);
+      return FmtSpec.parse(spec, pos).format(r);
     }
 
     /**
@@ -3126,188 +3541,10 @@ public abstract class Codes {
           builtIn, this) {
         @Override
         public Applicable1<String, Float> apply(List spec) {
-          final FmtSpec info = parseSpec(spec);
-          return r -> format(info, r);
+          final FmtSpec info = FmtSpec.parse(spec, pos);
+          return info::format;
         }
       };
-    }
-
-    /** Spec kind + precision, after validation. */
-    private static class FmtSpec {
-      final String kind;
-      final int n;
-
-      FmtSpec(String kind, int n) {
-        this.kind = kind;
-        this.n = n;
-      }
-    }
-
-    private FmtSpec parseSpec(List spec) {
-      final String kind = (String) spec.get(0);
-      if (kind.equals("EXACT")) {
-        return new FmtSpec("EXACT", 0);
-      }
-      final List opt = (List) spec.get(1);
-      final Integer n = opt.size() == 2 ? (Integer) opt.get(1) : null;
-      final int defaultN;
-      final int minN;
-      switch (kind) {
-        case "SCI":
-          defaultN = 6;
-          minN = 0;
-          break;
-        case "FIX":
-          defaultN = 6;
-          minN = 0;
-          break;
-        case "GEN":
-          defaultN = 12;
-          minN = 1;
-          break;
-        default:
-          throw new AssertionError("unknown realfmt: " + kind);
-      }
-      if (n != null && n < minN) {
-        throw new MorelRuntimeException(BuiltInExn.SIZE, pos);
-      }
-      return new FmtSpec(kind, n != null ? n : defaultN);
-    }
-
-    private static String format(FmtSpec info, float r) {
-      if (Float.isNaN(r)) {
-        return "nan";
-      }
-      if (r == Float.POSITIVE_INFINITY) {
-        return "inf";
-      }
-      if (r == Float.NEGATIVE_INFINITY) {
-        return "~inf";
-      }
-      switch (info.kind) {
-        case "SCI":
-          return formatSci(r, info.n);
-        case "FIX":
-          return formatFix(r, info.n);
-        case "GEN":
-          return formatGen(r, info.n);
-        case "EXACT":
-          return formatExact(r);
-        default:
-          throw new AssertionError();
-      }
-    }
-
-    /** Returns "~" for negative reals (including {@code ~0.0}), else "". */
-    private static String signPrefix(float r) {
-      return Float.floatToRawIntBits(r) < 0 ? "~" : "";
-    }
-
-    /** Formats {@code abs} as a non-negative BigDecimal with the bits of r. */
-    private static BigDecimal toBigDecimal(float r) {
-      return new BigDecimal(FLOAT_TO_STRING.apply(Math.abs(r)));
-    }
-
-    private static String formatFix(float r, int n) {
-      final StringBuilder sb = new StringBuilder(signPrefix(r));
-      if (r == 0.0f) {
-        sb.append('0');
-        if (n > 0) {
-          sb.append('.');
-          padRightTo(sb, sb.length() + n, '0');
-        }
-        return sb.toString();
-      }
-      final BigDecimal bd = toBigDecimal(r).setScale(n, RoundingMode.HALF_DOWN);
-      return sb.append(bd.toPlainString()).toString();
-    }
-
-    /** Formats r as {@code D.dddE±exp} with n digits after the decimal. */
-    private static String formatSci(float r, int n) {
-      final StringBuilder sb = new StringBuilder(signPrefix(r));
-      if (r == 0.0f) {
-        sb.append('0');
-        if (n > 0) {
-          sb.append('.');
-          padRightTo(sb, sb.length() + n, '0');
-        }
-        return sb.append("E0").toString();
-      }
-      // Express |r| as mantissa * 10^exp where mantissa in [1, 10).
-      final BigDecimal bd = toBigDecimal(r);
-      int exp = decimalExp(bd);
-      BigDecimal mantissa =
-          bd.movePointLeft(exp).setScale(n, RoundingMode.HALF_DOWN);
-      // Rounding may push the mantissa to exactly 10; renormalize.
-      if (mantissa.compareTo(BigDecimal.TEN) >= 0) {
-        mantissa = mantissa.movePointLeft(1);
-        exp++;
-      }
-      sb.append(mantissa.toPlainString()).append('E');
-      return appendSmlExp(sb, exp).toString();
-    }
-
-    /** Formats r as {@code 0.dddE±exp} with no trailing zeros. */
-    private static String formatExact(float r) {
-      final StringBuilder sb = new StringBuilder(signPrefix(r));
-      if (r == 0.0f) {
-        return sb.append("0.0").toString();
-      }
-      // bd is already non-negative because toBigDecimal uses Math.abs.
-      final BigDecimal bd = toBigDecimal(r).stripTrailingZeros();
-      // Emit as 0.<digits>; the exponent is one greater than the standard
-      // scientific exponent because the implied decimal point moves left by 1.
-      sb.append("0.").append(bd.unscaledValue().toString());
-      final int exp = decimalExp(bd) + 1;
-      if (exp == 0) {
-        return sb.toString();
-      }
-      return appendSmlExp(sb.append('E'), exp).toString();
-    }
-
-    /**
-     * Formats r with at most n significant digits, using fixed-point notation
-     * when the exponent is in {@code [-2, n)}, scientific notation otherwise.
-     * Trailing zeros are dropped.
-     */
-    private static String formatGen(float r, int n) {
-      final StringBuilder sb = new StringBuilder(signPrefix(r));
-      if (r == 0.0f) {
-        return sb.append('0').toString();
-      }
-      // Round to n significant digits, drop trailing zeros, then compute the
-      // exponent (rounding 9.99 to 3 s.f. gives 10.0, which is 1E1).
-      final BigDecimal bd =
-          toBigDecimal(r)
-              .round(new MathContext(n, RoundingMode.HALF_DOWN))
-              .stripTrailingZeros();
-      final int exp = decimalExp(bd);
-      // SML/NJ uses scientific form when exp <= -3 or exp >= n (i.e., the
-      // value would otherwise need leading zeros or be very large).
-      if (exp <= -3 || exp >= n) {
-        sb.append(bd.movePointLeft(exp).toPlainString()).append('E');
-        return appendSmlExp(sb, exp).toString();
-      }
-      // Fixed: emit at full precision, no trailing zeros.
-      return sb.append(bd.toPlainString()).toString();
-    }
-
-    /**
-     * The exponent that would appear in standard scientific notation — 0 for
-     * [1, 10), 1 for [10, 100), -1 for [0.1, 1), etc. Assumes {@code bd} is
-     * non-zero.
-     */
-    private static int decimalExp(BigDecimal bd) {
-      return bd.precision() - bd.scale() - 1;
-    }
-
-    /** Appends {@code exp} to {@code sb} using SML's {@code ~} for negative. */
-    private static StringBuilder appendSmlExp(StringBuilder sb, int exp) {
-      if (exp < 0) {
-        sb.append('~');
-        exp = -exp;
-      }
-      return sb.append(exp);
     }
   }
 
@@ -3464,6 +3701,102 @@ public abstract class Codes {
 
   /** @see BuiltIn#REAL_NEG_INF */
   private static final float REAL_NEG_INF = Float.NEGATIVE_INFINITY;
+
+  /** @see BuiltIn#REAL_OP_EQ */
+  private static final Applicable2 REAL_OP_EQ =
+      new BaseApplicable2<Boolean, Float, Float>(BuiltIn.REAL_OP_EQ) {
+        @Override
+        public Boolean apply(Float a0, Float a1) {
+          return a0.equals(a1);
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_GE */
+  private static final Applicable2 REAL_OP_GE =
+      new BaseApplicable2<Boolean, Float, Float>(BuiltIn.REAL_OP_GE) {
+        @Override
+        public Boolean apply(Float a0, Float a1) {
+          return a0 >= a1;
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_GT */
+  private static final Applicable2 REAL_OP_GT =
+      new BaseApplicable2<Boolean, Float, Float>(BuiltIn.REAL_OP_GT) {
+        @Override
+        public Boolean apply(Float a0, Float a1) {
+          return a0 > a1;
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_LE */
+  private static final Applicable2 REAL_OP_LE =
+      new BaseApplicable2<Boolean, Float, Float>(BuiltIn.REAL_OP_LE) {
+        @Override
+        public Boolean apply(Float a0, Float a1) {
+          return a0 <= a1;
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_LT */
+  private static final Applicable2 REAL_OP_LT =
+      new BaseApplicable2<Boolean, Float, Float>(BuiltIn.REAL_OP_LT) {
+        @Override
+        public Boolean apply(Float a0, Float a1) {
+          return a0 < a1;
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_MINUS */
+  private static final Applicable2 REAL_OP_MINUS =
+      new BaseApplicable2<Float, Float, Float>(BuiltIn.REAL_OP_MINUS) {
+        @Override
+        public Float apply(Float a0, Float a1) {
+          return a0 - a1;
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_NE */
+  private static final Applicable2 REAL_OP_NE =
+      new BaseApplicable2<Boolean, Float, Float>(BuiltIn.REAL_OP_NE) {
+        @Override
+        public Boolean apply(Float a0, Float a1) {
+          return !a0.equals(a1);
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_NEGATE */
+  private static final Applicable1 REAL_OP_NEGATE =
+      new BaseApplicable1<Float, Float>(BuiltIn.REAL_OP_NEGATE) {
+        @Override
+        public Float apply(Float f) {
+          if (Float.isNaN(f)) {
+            return Float.floatToRawIntBits(f)
+                    == Float.floatToRawIntBits(NEGATIVE_NAN)
+                ? Float.NaN
+                : NEGATIVE_NAN;
+          }
+          return -f;
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_PLUS */
+  private static final Applicable2 REAL_OP_PLUS =
+      new BaseApplicable2<Float, Float, Float>(BuiltIn.REAL_OP_PLUS) {
+        @Override
+        public Float apply(Float a0, Float a1) {
+          return a0 + a1;
+        }
+      };
+
+  /** @see BuiltIn#REAL_OP_TIMES */
+  private static final Applicable2 REAL_OP_TIMES =
+      new BaseApplicable2<Float, Float, Float>(BuiltIn.REAL_OP_TIMES) {
+        @Override
+        public Float apply(Float a0, Float a1) {
+          return a0 * a1;
+        }
+      };
 
   /** @see BuiltIn#REAL_POS_INF */
   private static final float REAL_POS_INF = Float.POSITIVE_INFINITY;
@@ -3792,7 +4125,7 @@ public abstract class Codes {
   /** @see BuiltIn#RELATIONAL_MAX_BY */
   @SuppressWarnings({"rawtypes", "unchecked"})
   private static final Applicable RELATIONAL_MAX_BY =
-      new ApplicableImpl(BuiltIn.RELATIONAL_MAX_BY) {
+      new BaseApplicable(BuiltIn.RELATIONAL_MAX_BY) {
         @Override
         public Object apply(Stack stack, Object keyFn) {
           return new BaseApplicable1<Object, List>(BuiltIn.RELATIONAL_MAX_BY) {
@@ -3826,7 +4159,7 @@ public abstract class Codes {
   /** @see BuiltIn#RELATIONAL_MIN_BY */
   @SuppressWarnings({"rawtypes", "unchecked"})
   private static final Applicable RELATIONAL_MIN_BY =
-      new ApplicableImpl(BuiltIn.RELATIONAL_MIN_BY) {
+      new BaseApplicable(BuiltIn.RELATIONAL_MIN_BY) {
         @Override
         public Object apply(Stack stack, Object keyFn) {
           return new BaseApplicable1<Object, List>(BuiltIn.RELATIONAL_MIN_BY) {
@@ -3859,18 +4192,21 @@ public abstract class Codes {
 
   /** @see BuiltIn#RELATIONAL_ONLY */
   private static final Applicable RELATIONAL_ONLY =
-      new RelationalOnly(Pos.ZERO);
+      new RelationalOnly(BuiltIn.RELATIONAL_ONLY, Pos.ZERO);
 
-  /** Implements {@link #RELATIONAL_ONLY}. */
+  /**
+   * Implements {@link #RELATIONAL_ONLY}, {@link #LIST_ONLY} and {@link
+   * #BAG_ONLY}.
+   */
   private static class RelationalOnly
       extends BasePositionedApplicable1<Object, List> {
-    RelationalOnly(Pos pos) {
-      super(BuiltIn.RELATIONAL_ONLY, pos);
+    RelationalOnly(BuiltIn builtIn, Pos pos) {
+      super(builtIn, pos);
     }
 
     @Override
     public Applicable withPos(Pos pos) {
-      return new RelationalOnly(pos);
+      return new RelationalOnly(builtIn, pos);
     }
 
     @Override
@@ -3897,7 +4233,8 @@ public abstract class Codes {
               return core.functionLiteral(typeSystem, BuiltIn.Z_SUM_REAL);
           }
         }
-        throw new AssertionError("bad type " + argType);
+        throw new CompileException(
+            "operator not defined for type '" + argType + "'", false, Pos.ZERO);
       };
 
   /** @see BuiltIn#STRING_COLLATE */
@@ -4136,6 +4473,15 @@ public abstract class Codes {
         }
       };
 
+  /** @see BuiltIn#STRING_OP_EQ */
+  private static final Applicable2 STRING_OP_EQ =
+      new BaseApplicable2<Boolean, String, String>(BuiltIn.STRING_OP_EQ) {
+        @Override
+        public Boolean apply(String a0, String a1) {
+          return a0.equals(a1);
+        }
+      };
+
   /** @see BuiltIn#STRING_OP_GE */
   private static final Applicable2 STRING_OP_GE =
       new BaseApplicable2<Boolean, String, String>(BuiltIn.STRING_OP_GE) {
@@ -4169,6 +4515,15 @@ public abstract class Codes {
         @Override
         public Boolean apply(String a0, String a1) {
           return a0.compareTo(a1) < 0;
+        }
+      };
+
+  /** @see BuiltIn#STRING_OP_NE */
+  private static final Applicable2 STRING_OP_NE =
+      new BaseApplicable2<Boolean, String, String>(BuiltIn.STRING_OP_NE) {
+        @Override
+        public Boolean apply(String a0, String a1) {
+          return !a0.equals(a1);
         }
       };
 
@@ -4937,6 +5292,394 @@ public abstract class Codes {
     }
   }
 
+  // Word values are stored as the bit pattern of a signed Java 'long';
+  // wordSize is 64. Unsigned semantics use the Long.*Unsigned helpers.
+
+  /** @see BuiltIn#WORD_ANDB */
+  private static final Applicable2 WORD_ANDB =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_ANDB) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return a0 & a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_COMPARE */
+  private static final Applicable2 WORD_COMPARE =
+      new BaseApplicable2<List, Long, Long>(BuiltIn.WORD_COMPARE) {
+        @Override
+        public List apply(Long a0, Long a1) {
+          return order(Long.compareUnsigned(a0, a1));
+        }
+      };
+
+  /** @see BuiltIn#WORD_DIV */
+  private static final Applicable2 WORD_DIV =
+      new WordDiv(BuiltIn.WORD_DIV, Pos.ZERO);
+
+  /** Implements {@link #WORD_DIV}. */
+  private static class WordDiv
+      extends BasePositionedApplicable2<Long, Long, Long> {
+    WordDiv(BuiltIn builtIn, Pos pos) {
+      super(builtIn, pos);
+    }
+
+    @Override
+    public Applicable withPos(Pos pos) {
+      return new WordDiv(builtIn, pos);
+    }
+
+    @Override
+    public Long apply(Long a0, Long a1) {
+      if (a1 == 0) {
+        throw new MorelRuntimeException(BuiltInExn.DIV, pos);
+      }
+      return Long.divideUnsigned(a0, a1);
+    }
+  }
+
+  /** @see BuiltIn#WORD_FMT */
+  private static final Applicable2 WORD_FMT =
+      new BaseApplicable2<String, List, Long>(BuiltIn.WORD_FMT) {
+        @Override
+        public String apply(List radix, Long w) {
+          return Long.toUnsignedString(w, Radix.of(radix).base)
+              .toUpperCase(Locale.ROOT);
+        }
+      };
+
+  /** @see BuiltIn#WORD_FROM_INT */
+  private static final Applicable1 WORD_FROM_INT =
+      new BaseApplicable1<Long, Integer>(BuiltIn.WORD_FROM_INT) {
+        @Override
+        public Long apply(Integer i) {
+          return (long) i;
+        }
+      };
+
+  /** @see BuiltIn#WORD_FROM_LARGE */
+  private static final Applicable1 WORD_FROM_LARGE =
+      identity(BuiltIn.WORD_FROM_LARGE);
+
+  /** @see BuiltIn#WORD_FROM_LARGE_INT */
+  private static final Applicable1 WORD_FROM_LARGE_INT =
+      new BaseApplicable1<Long, Integer>(BuiltIn.WORD_FROM_LARGE_INT) {
+        @Override
+        public Long apply(Integer i) {
+          return (long) i;
+        }
+      };
+
+  /** @see BuiltIn#WORD_FROM_LARGE_WORD */
+  private static final Applicable1 WORD_FROM_LARGE_WORD =
+      identity(BuiltIn.WORD_FROM_LARGE_WORD);
+
+  /**
+   * Matches optional whitespace, an optional {@code 0x}/{@code 0X}/{@code
+   * 0wx}/{@code 0wX} prefix, then one or more hex digits. The prefix is only
+   * consumed when followed by a hex digit (regex backtracking), so {@code
+   * "0xG"} parses as just {@code "0"}.
+   */
+  static final Pattern WORD_HEX_PATTERN =
+      Pattern.compile("^\\s*(?:0[wW]?[xX])?([0-9a-fA-F]+)");
+
+  /** @see BuiltIn#WORD_FROM_STRING */
+  private static final Applicable WORD_FROM_STRING =
+      new WordFromString(BuiltIn.WORD_FROM_STRING, Pos.ZERO);
+
+  /** Implements {@link #WORD_FROM_STRING}. */
+  private static class WordFromString
+      extends BasePositionedApplicable1<List, String> {
+    WordFromString(BuiltIn builtIn, Pos pos) {
+      super(builtIn, pos);
+    }
+
+    @Override
+    public Applicable withPos(Pos pos) {
+      return new WordFromString(builtIn, pos);
+    }
+
+    @Override
+    public List apply(String s) {
+      final Matcher m = WORD_HEX_PATTERN.matcher(s);
+      if (!m.find()) {
+        return OPTION_NONE;
+      }
+      try {
+        return optionSome(Long.parseUnsignedLong(m.group(1), 16));
+      } catch (NumberFormatException e) {
+        throw new MorelRuntimeException(BuiltInExn.OVERFLOW, pos);
+      }
+    }
+  }
+
+  /** @see BuiltIn#WORD_MAX */
+  private static final Applicable2 WORD_MAX =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_MAX) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return Long.compareUnsigned(a0, a1) >= 0 ? a0 : a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_MIN */
+  private static final Applicable2 WORD_MIN =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_MIN) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return Long.compareUnsigned(a0, a1) <= 0 ? a0 : a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_MOD */
+  private static final Applicable2 WORD_MOD =
+      new WordMod(BuiltIn.WORD_MOD, Pos.ZERO);
+
+  /** Implements {@link #WORD_MOD}. */
+  private static class WordMod
+      extends BasePositionedApplicable2<Long, Long, Long> {
+    WordMod(BuiltIn builtIn, Pos pos) {
+      super(builtIn, pos);
+    }
+
+    @Override
+    public Applicable withPos(Pos pos) {
+      return new WordMod(builtIn, pos);
+    }
+
+    @Override
+    public Long apply(Long a0, Long a1) {
+      if (a1 == 0) {
+        throw new MorelRuntimeException(BuiltInExn.DIV, pos);
+      }
+      return Long.remainderUnsigned(a0, a1);
+    }
+  }
+
+  /** @see BuiltIn#WORD_NOTB */
+  private static final Applicable1 WORD_NOTB =
+      new BaseApplicable1<Long, Long>(BuiltIn.WORD_NOTB) {
+        @Override
+        public Long apply(Long w) {
+          return ~w;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_GE */
+  private static final Applicable2 WORD_OP_GE =
+      new BaseApplicable2<Boolean, Long, Long>(BuiltIn.WORD_OP_GE) {
+        @Override
+        public Boolean apply(Long a0, Long a1) {
+          return Long.compareUnsigned(a0, a1) >= 0;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_GT */
+  private static final Applicable2 WORD_OP_GT =
+      new BaseApplicable2<Boolean, Long, Long>(BuiltIn.WORD_OP_GT) {
+        @Override
+        public Boolean apply(Long a0, Long a1) {
+          return Long.compareUnsigned(a0, a1) > 0;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_LE */
+  private static final Applicable2 WORD_OP_LE =
+      new BaseApplicable2<Boolean, Long, Long>(BuiltIn.WORD_OP_LE) {
+        @Override
+        public Boolean apply(Long a0, Long a1) {
+          return Long.compareUnsigned(a0, a1) <= 0;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_LT */
+  private static final Applicable2 WORD_OP_LT =
+      new BaseApplicable2<Boolean, Long, Long>(BuiltIn.WORD_OP_LT) {
+        @Override
+        public Boolean apply(Long a0, Long a1) {
+          return Long.compareUnsigned(a0, a1) < 0;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_MINUS */
+  private static final Applicable2 WORD_OP_MINUS =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_OP_MINUS) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return a0 - a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_NEGATE */
+  private static final Applicable1 WORD_OP_NEGATE =
+      new BaseApplicable1<Long, Long>(BuiltIn.WORD_OP_NEGATE) {
+        @Override
+        public Long apply(Long w) {
+          return -w;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_PLUS */
+  private static final Applicable2 WORD_OP_PLUS =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_OP_PLUS) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return a0 + a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_SHIFT_LEFT */
+  private static final Applicable2 WORD_OP_SHIFT_LEFT =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_OP_SHIFT_LEFT) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return Long.compareUnsigned(a1, 64) >= 0 ? 0L : a0 << a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_SHIFT_RIGHT */
+  private static final Applicable2 WORD_OP_SHIFT_RIGHT =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_OP_SHIFT_RIGHT) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return Long.compareUnsigned(a1, 64) >= 0 ? 0L : a0 >>> a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_SHIFT_RIGHT_ARITHMETIC */
+  private static final Applicable2 WORD_OP_SHIFT_RIGHT_ARITHMETIC =
+      new BaseApplicable2<Long, Long, Long>(
+          BuiltIn.WORD_OP_SHIFT_RIGHT_ARITHMETIC) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          if (Long.compareUnsigned(a1, 64) >= 0) {
+            return a0 < 0 ? -1L : 0L;
+          }
+          return a0 >> a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_OP_TIMES */
+  private static final Applicable2 WORD_OP_TIMES =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_OP_TIMES) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return a0 * a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_ORB */
+  private static final Applicable2 WORD_ORB =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_ORB) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return a0 | a1;
+        }
+      };
+
+  /** @see BuiltIn#WORD_TO_INT */
+  private static final Applicable WORD_TO_INT =
+      new WordToInt(BuiltIn.WORD_TO_INT, Pos.ZERO);
+
+  /**
+   * Implements {@link #WORD_TO_INT} and {@link #WORD_TO_LARGE_INT}: treats the
+   * word as an unsigned value and raises {@code Overflow} if it does not fit in
+   * {@code int}.
+   */
+  private static class WordToInt
+      extends BasePositionedApplicable1<Integer, Long> {
+    WordToInt(BuiltIn builtIn, Pos pos) {
+      super(builtIn, pos);
+    }
+
+    @Override
+    public Applicable withPos(Pos pos) {
+      return new WordToInt(builtIn, pos);
+    }
+
+    @Override
+    public Integer apply(Long w) {
+      if (Long.compareUnsigned(w, Integer.MAX_VALUE) > 0) {
+        throw new MorelRuntimeException(BuiltInExn.OVERFLOW, pos);
+      }
+      return (int) (long) w;
+    }
+  }
+
+  /** @see BuiltIn#WORD_TO_INT_X */
+  private static final Applicable WORD_TO_INT_X =
+      new WordToIntX(BuiltIn.WORD_TO_INT_X, Pos.ZERO);
+
+  /**
+   * Implements {@link #WORD_TO_INT_X} and {@link #WORD_TO_LARGE_INT_X}: treats
+   * the word as a signed 2's-complement value and raises {@code Overflow} if it
+   * does not fit in {@code int}.
+   */
+  private static class WordToIntX
+      extends BasePositionedApplicable1<Integer, Long> {
+    WordToIntX(BuiltIn builtIn, Pos pos) {
+      super(builtIn, pos);
+    }
+
+    @Override
+    public Applicable withPos(Pos pos) {
+      return new WordToIntX(builtIn, pos);
+    }
+
+    @Override
+    public Integer apply(Long w) {
+      if (w < Integer.MIN_VALUE || w > Integer.MAX_VALUE) {
+        throw new MorelRuntimeException(BuiltInExn.OVERFLOW, pos);
+      }
+      return (int) (long) w;
+    }
+  }
+
+  /** @see BuiltIn#WORD_TO_LARGE */
+  private static final Applicable1 WORD_TO_LARGE =
+      identity(BuiltIn.WORD_TO_LARGE);
+
+  /** @see BuiltIn#WORD_TO_LARGE_INT */
+  private static final Applicable WORD_TO_LARGE_INT =
+      new WordToInt(BuiltIn.WORD_TO_LARGE_INT, Pos.ZERO);
+
+  /** @see BuiltIn#WORD_TO_LARGE_INT_X */
+  private static final Applicable WORD_TO_LARGE_INT_X =
+      new WordToIntX(BuiltIn.WORD_TO_LARGE_INT_X, Pos.ZERO);
+
+  /** @see BuiltIn#WORD_TO_LARGE_WORD */
+  private static final Applicable1 WORD_TO_LARGE_WORD =
+      identity(BuiltIn.WORD_TO_LARGE_WORD);
+
+  /** @see BuiltIn#WORD_TO_LARGE_WORD_X */
+  private static final Applicable1 WORD_TO_LARGE_WORD_X =
+      identity(BuiltIn.WORD_TO_LARGE_WORD_X);
+
+  /** @see BuiltIn#WORD_TO_LARGE_X */
+  private static final Applicable1 WORD_TO_LARGE_X =
+      identity(BuiltIn.WORD_TO_LARGE_X);
+
+  /** @see BuiltIn#WORD_TO_STRING */
+  private static final Applicable1 WORD_TO_STRING =
+      new BaseApplicable1<String, Long>(BuiltIn.WORD_TO_STRING) {
+        @Override
+        public String apply(Long w) {
+          return Long.toUnsignedString(w, 16).toUpperCase(Locale.ROOT);
+        }
+      };
+
+  /** @see BuiltIn#WORD_WORD_SIZE */
+  private static final int WORD_WORD_SIZE = 64;
+
+  /** @see BuiltIn#WORD_XORB */
+  private static final Applicable2 WORD_XORB =
+      new BaseApplicable2<Long, Long, Long>(BuiltIn.WORD_XORB) {
+        @Override
+        public Long apply(Long a0, Long a1) {
+          return a0 ^ a1;
+        }
+      };
+
   /** @see BuiltIn#Z_EXTENT */
   private static final Applicable Z_EXTENT =
       new BaseApplicable1<List, RangeExtent>(BuiltIn.Z_EXTENT) {
@@ -4951,68 +5694,6 @@ public abstract class Codes {
 
   /** @see BuiltIn#Z_LIST */
   private static final Applicable1 Z_LIST = identity(BuiltIn.Z_LIST);
-
-  /** Implements {@link #OP_MINUS} for type {@code int}. */
-  private static final Applicable2 Z_MINUS_INT =
-      new BaseApplicable2<Integer, Integer, Integer>(BuiltIn.OP_MINUS) {
-        @Override
-        public Integer apply(Integer a0, Integer a1) {
-          return a0 - a1;
-        }
-      };
-
-  /** Implements {@link #OP_MINUS} for type {@code real}. */
-  private static final Applicable2 Z_MINUS_REAL =
-      new BaseApplicable2<Float, Float, Float>(BuiltIn.OP_MINUS) {
-        @Override
-        public Float apply(Float a0, Float a1) {
-          return a0 - a1;
-        }
-      };
-
-  /** Implements {@link #OP_NEGATE} for type {@code int}. */
-  private static final Applicable Z_NEGATE_INT =
-      new BaseApplicable1<Integer, Integer>(BuiltIn.OP_NEGATE) {
-        @Override
-        public Integer apply(Integer i) {
-          return -i;
-        }
-      };
-
-  /** Implements {@link #OP_NEGATE} for type {@code real}. */
-  private static final Applicable Z_NEGATE_REAL =
-      new BaseApplicable1<Float, Float>(BuiltIn.OP_NEGATE) {
-        @Override
-        public Float apply(Float f) {
-          if (Float.isNaN(f)) {
-            // ~nan -> nan
-            // nan (or any other value f such that isNan(f)) -> ~nan
-            return Float.floatToRawIntBits(f)
-                    == Float.floatToRawIntBits(NEGATIVE_NAN)
-                ? Float.NaN
-                : NEGATIVE_NAN;
-          }
-          return -f;
-        }
-      };
-
-  /** Implements {@link #OP_PLUS} for type {@code int}. */
-  private static final Applicable2 Z_PLUS_INT =
-      new BaseApplicable2<Integer, Integer, Integer>(BuiltIn.OP_PLUS) {
-        @Override
-        public Integer apply(Integer a0, Integer a1) {
-          return a0 + a1;
-        }
-      };
-
-  /** Implements {@link #OP_PLUS} for type {@code real}. */
-  private static final Applicable2 Z_PLUS_REAL =
-      new BaseApplicable2<Float, Float, Float>(BuiltIn.OP_PLUS) {
-        @Override
-        public Float apply(Float a0, Float a1) {
-          return a0 + a1;
-        }
-      };
 
   /** Implements {@link #RELATIONAL_SUM} for type {@code int list}. */
   private static final Applicable Z_SUM_INT =
@@ -5068,24 +5749,6 @@ public abstract class Codes {
         }
       };
 
-  /** Implements {@link #OP_TIMES} for type {@code int}. */
-  private static final Applicable2 Z_TIMES_INT =
-      new BaseApplicable2<Integer, Integer, Integer>(BuiltIn.OP_TIMES) {
-        @Override
-        public Integer apply(Integer a0, Integer a1) {
-          return a0 * a1;
-        }
-      };
-
-  /** Implements {@link #OP_TIMES} for type {@code real}. */
-  private static final Applicable2 Z_TIMES_REAL =
-      new BaseApplicable2<Float, Float, Float>(BuiltIn.OP_TIMES) {
-        @Override
-        public Float apply(Float a0, Float a1) {
-          return a0 * a1;
-        }
-      };
-
   // ---------------------------------------------------------------------------
 
   private static void populateBuiltIns(Map<String, Object> valueMap) {
@@ -5102,11 +5765,11 @@ public abstract class Codes {
           if (value == null) {
             throw new AssertionError("no implementation for " + key);
           }
-          if (key.structure == null) {
+          if (key.structure.equals("Top")) {
             valueMap.put(key.mlName, value);
           }
-          if (key.alias != null) {
-            valueMap.put(key.alias, value);
+          for (String alias : key.aliases()) {
+            valueMap.put(alias, value);
           }
         });
     BuiltIn.forEachStructure(
@@ -5404,14 +6067,14 @@ public abstract class Codes {
     BUILT_IN_VALUES.forEach(
         (key, value) -> {
           final Type type = key.typeFunction.apply(typeSystem);
-          if (key.structure == null) {
+          if (key.structure.equals("Top")) {
             final Core.IdPat idPat =
                 core.idPat(type, key.mlName, typeSystem.nameGenerator::inc);
             hEnv[0] = hEnv[0].bind(idPat, value);
           }
-          if (key.alias != null) {
+          for (String alias : key.aliases()) {
             final Core.IdPat idPat =
-                core.idPat(type, key.alias, typeSystem.nameGenerator::inc);
+                core.idPat(type, alias, typeSystem.nameGenerator::inc);
             hEnv[0] = hEnv[0].bind(idPat, value);
           }
         });
@@ -5541,406 +6204,491 @@ public abstract class Codes {
     };
   }
 
-  public static final ImmutableMap<BuiltIn, Object> BUILT_IN_VALUES =
-      new Builder()
-          .put(BuiltIn.TRUE, true)
-          .put(BuiltIn.FALSE, false)
-          .put(BuiltIn.NOT, NOT)
-          // lint: sort until '#.build\\(\\);' where '##\\.put'
-          .put(BuiltIn.ABS, ABS)
-          .put(BuiltIn.BAG_ALL, BAG_ALL)
-          .put(BuiltIn.BAG_APP, BAG_APP)
-          .put(BuiltIn.BAG_AT, BAG_AT)
-          .put(BuiltIn.BAG_CONCAT, BAG_CONCAT)
-          .put(BuiltIn.BAG_DROP, BAG_DROP)
-          .put(BuiltIn.BAG_EXISTS, BAG_EXISTS)
-          .put(BuiltIn.BAG_FILTER, BAG_FILTER)
-          .put(BuiltIn.BAG_FIND, BAG_FIND)
-          .put(BuiltIn.BAG_FOLD, BAG_FOLD)
-          .put(BuiltIn.BAG_FROM_LIST, BAG_FROM_LIST)
-          .put(BuiltIn.BAG_GET_ITEM, BAG_GET_ITEM)
-          .put(BuiltIn.BAG_HD, BAG_HD)
-          .put(BuiltIn.BAG_LENGTH, BAG_LENGTH)
-          .put(BuiltIn.BAG_MAP, BAG_MAP)
-          .put(BuiltIn.BAG_MAP_PARTIAL, BAG_MAP_PARTIAL)
-          .put(BuiltIn.BAG_NIL, ImmutableList.of())
-          .put(BuiltIn.BAG_NTH, BAG_NTH)
-          .put(BuiltIn.BAG_NULL, BAG_NULL)
-          .put(BuiltIn.BAG_PARTITION, BAG_PARTITION)
-          .put(BuiltIn.BAG_TABULATE, BAG_TABULATE)
-          .put(BuiltIn.BAG_TAKE, BAG_TAKE)
-          .put(BuiltIn.BAG_TL, BAG_TL)
-          .put(BuiltIn.BAG_TO_LIST, BAG_TO_LIST)
-          .put(BuiltIn.BOOL_FROM_STRING, BOOL_FROM_STRING)
-          .put(BuiltIn.BOOL_NOT, BOOL_NOT)
-          .put(BuiltIn.BOOL_TO_STRING, BOOL_TO_STRING)
-          .put(BuiltIn.CHAR_CHR, CHAR_CHR)
-          .put(BuiltIn.CHAR_COMPARE, CHAR_COMPARE)
-          .put(BuiltIn.CHAR_CONTAINS, CHAR_CONTAINS)
-          .put(BuiltIn.CHAR_FROM_CSTRING, CHAR_FROM_CSTRING)
-          .put(BuiltIn.CHAR_FROM_STRING, CHAR_FROM_STRING)
-          .put(BuiltIn.CHAR_IS_ALPHA, CHAR_IS_ALPHA)
-          .put(BuiltIn.CHAR_IS_ALPHA_NUM, CHAR_IS_ALPHA_NUM)
-          .put(BuiltIn.CHAR_IS_ASCII, CHAR_IS_ASCII)
-          .put(BuiltIn.CHAR_IS_CNTRL, CHAR_IS_CNTRL)
-          .put(BuiltIn.CHAR_IS_DIGIT, CHAR_IS_DIGIT)
-          .put(BuiltIn.CHAR_IS_GRAPH, CHAR_IS_GRAPH)
-          .put(BuiltIn.CHAR_IS_HEX_DIGIT, CHAR_IS_HEX_DIGIT)
-          .put(BuiltIn.CHAR_IS_LOWER, CHAR_IS_LOWER)
-          .put(BuiltIn.CHAR_IS_PRINT, CHAR_IS_PRINT)
-          .put(BuiltIn.CHAR_IS_PUNCT, CHAR_IS_PUNCT)
-          .put(BuiltIn.CHAR_IS_SPACE, CHAR_IS_SPACE)
-          .put(BuiltIn.CHAR_IS_UPPER, CHAR_IS_UPPER)
-          .put(BuiltIn.CHAR_MAX_CHAR, CHAR_MAX_CHAR)
-          .put(BuiltIn.CHAR_MAX_ORD, CHAR_MAX_ORD)
-          .put(BuiltIn.CHAR_MIN_CHAR, CHAR_MIN_CHAR)
-          .put(BuiltIn.CHAR_NOT_CONTAINS, CHAR_NOT_CONTAINS)
-          .put(BuiltIn.CHAR_OP_GE, CHAR_OP_GE)
-          .put(BuiltIn.CHAR_OP_GT, CHAR_OP_GT)
-          .put(BuiltIn.CHAR_OP_LE, CHAR_OP_LE)
-          .put(BuiltIn.CHAR_OP_LT, CHAR_OP_LT)
-          .put(BuiltIn.CHAR_ORD, CHAR_ORD)
-          .put(BuiltIn.CHAR_PRED, CHAR_PRED)
-          .put(BuiltIn.CHAR_SUCC, CHAR_SUCC)
-          .put(BuiltIn.CHAR_TO_CSTRING, CHAR_TO_CSTRING)
-          .put(BuiltIn.CHAR_TO_LOWER, CHAR_TO_LOWER)
-          .put(BuiltIn.CHAR_TO_STRING, CHAR_TO_STRING)
-          .put(BuiltIn.CHAR_TO_UPPER, CHAR_TO_UPPER)
-          .put(BuiltIn.DATALOG_EXECUTE, DATALOG_EXECUTE)
-          .put(BuiltIn.DATALOG_TRANSLATE, DATALOG_TRANSLATE)
-          .put(BuiltIn.DATALOG_VALIDATE, DATALOG_VALIDATE)
-          .put(BuiltIn.DATE_COMPARE, DATE_COMPARE)
-          .put(BuiltIn.DATE_DATE, DATE_DATE)
-          .put(BuiltIn.DATE_DAY, DATE_DAY)
-          .put(BuiltIn.DATE_FMT, DATE_FMT)
-          .put(BuiltIn.DATE_FROM_STRING, DATE_FROM_STRING)
-          .put(BuiltIn.DATE_FROM_TIME_LOCAL, DATE_FROM_TIME_LOCAL)
-          .put(BuiltIn.DATE_FROM_TIME_UNIV, DATE_FROM_TIME_UNIV)
-          .put(BuiltIn.DATE_HOUR, DATE_HOUR)
-          .put(BuiltIn.DATE_IS_DST, DATE_IS_DST)
-          .put(BuiltIn.DATE_LOCAL_OFFSET, DATE_LOCAL_OFFSET)
-          .put(BuiltIn.DATE_MINUTE, DATE_MINUTE)
-          .put(BuiltIn.DATE_MONTH_FN, DATE_MONTH_FN)
-          .put(BuiltIn.DATE_SECOND, DATE_SECOND)
-          .put(BuiltIn.DATE_TO_STRING, DATE_TO_STRING)
-          .put(BuiltIn.DATE_TO_TIME, DATE_TO_TIME)
-          .put(BuiltIn.DATE_WEEK_DAY, DATE_WEEK_DAY)
-          .put(BuiltIn.DATE_YEAR, DATE_YEAR)
-          .put(BuiltIn.DATE_YEAR_DAY, DATE_YEAR_DAY)
-          .put(BuiltIn.EITHER_APP, EITHER_APP)
-          .put(BuiltIn.EITHER_APP_LEFT, EITHER_APP_LEFT)
-          .put(BuiltIn.EITHER_APP_RIGHT, EITHER_APP_RIGHT)
-          .put(BuiltIn.EITHER_AS_LEFT, EITHER_AS_LEFT)
-          .put(BuiltIn.EITHER_AS_RIGHT, EITHER_AS_RIGHT)
-          .put(BuiltIn.EITHER_FOLD, EITHER_FOLD)
-          .put(BuiltIn.EITHER_IS_LEFT, EITHER_IS_LEFT)
-          .put(BuiltIn.EITHER_IS_RIGHT, EITHER_IS_RIGHT)
-          .put(BuiltIn.EITHER_MAP, EITHER_MAP)
-          .put(BuiltIn.EITHER_MAP_LEFT, EITHER_MAP_LEFT)
-          .put(BuiltIn.EITHER_MAP_RIGHT, EITHER_MAP_RIGHT)
-          .put(BuiltIn.EITHER_PARTITION, EITHER_PARTITION)
-          .put(BuiltIn.EITHER_PROJ, EITHER_PROJ)
-          .put(BuiltIn.FN_APPLY, FN_APPLY)
-          .put(BuiltIn.FN_CONST, FN_CONST)
-          .put(BuiltIn.FN_CURRY, FN_CURRY)
-          .put(BuiltIn.FN_EQUAL, FN_EQUAL)
-          .put(BuiltIn.FN_FLIP, FN_FLIP)
-          .put(BuiltIn.FN_ID, FN_ID)
-          .put(BuiltIn.FN_NOT_EQUAL, FN_NOT_EQUAL)
-          .put(BuiltIn.FN_O, FN_OP_O)
-          .put(BuiltIn.FN_REPEAT, FN_REPEAT)
-          .put(BuiltIn.FN_UNCURRY, FN_UNCURRY)
-          .put(BuiltIn.GENERAL_BEFORE, GENERAL_BEFORE)
-          .put(BuiltIn.GENERAL_EXN_MESSAGE, GENERAL_EXN_MESSAGE)
-          .put(BuiltIn.GENERAL_EXN_NAME, GENERAL_EXN_NAME)
-          .put(BuiltIn.GENERAL_IGNORE, GENERAL_IGNORE)
-          .put(BuiltIn.GENERAL_O, GENERAL_OP_O)
-          .put(BuiltIn.INT_ABS, INT_ABS)
-          .put(BuiltIn.INT_COMPARE, INT_COMPARE)
-          .put(BuiltIn.INT_DIV, INT_DIV)
-          .put(BuiltIn.INT_FMT, INT_FMT)
-          .put(BuiltIn.INT_FROM_INT, INT_FROM_INT)
-          .put(BuiltIn.INT_FROM_LARGE, INT_FROM_LARGE)
-          .put(BuiltIn.INT_FROM_STRING, INT_FROM_STRING)
-          .put(BuiltIn.INT_MAX, INT_MAX)
-          .put(BuiltIn.INT_MAX_INT, INT_MAX_INT)
-          .put(BuiltIn.INT_MIN, INT_MIN)
-          .put(BuiltIn.INT_MIN_INT, INT_MIN_INT)
-          .put(BuiltIn.INT_MOD, INT_MOD)
-          .put(BuiltIn.INT_PRECISION, INT_PRECISION)
-          .put(BuiltIn.INT_QUOT, INT_QUOT)
-          .put(BuiltIn.INT_REM, INT_REM)
-          .put(BuiltIn.INT_SAME_SIGN, INT_SAME_SIGN)
-          .put(BuiltIn.INT_SIGN, INT_SIGN)
-          .put(BuiltIn.INT_TO_INT, INT_TO_INT)
-          .put(BuiltIn.INT_TO_LARGE, INT_TO_LARGE)
-          .put(BuiltIn.INT_TO_STRING, INT_TO_STRING)
-          .put(BuiltIn.INTERACT_USE, INTERACT_USE)
-          .put(BuiltIn.INTERACT_USE_SILENTLY, INTERACT_USE_SILENTLY)
-          .put(BuiltIn.LIST_ALL, LIST_ALL)
-          .put(BuiltIn.LIST_APP, LIST_APP)
-          .put(BuiltIn.LIST_AT, LIST_AT)
-          .put(BuiltIn.LIST_COLLATE, LIST_COLLATE)
-          .put(BuiltIn.LIST_CONCAT, LIST_CONCAT)
-          .put(BuiltIn.LIST_DROP, LIST_DROP)
-          .put(BuiltIn.LIST_EXCEPT, LIST_EXCEPT)
-          .put(BuiltIn.LIST_EXISTS, LIST_EXISTS)
-          .put(BuiltIn.LIST_FILTER, LIST_FILTER)
-          .put(BuiltIn.LIST_FIND, LIST_FIND)
-          .put(BuiltIn.LIST_FOLDL, LIST_FOLDL)
-          .put(BuiltIn.LIST_FOLDR, LIST_FOLDR)
-          .put(BuiltIn.LIST_GET_ITEM, LIST_GET_ITEM)
-          .put(BuiltIn.LIST_HD, LIST_HD)
-          .put(BuiltIn.LIST_INTERSECT, LIST_INTERSECT)
-          .put(BuiltIn.LIST_LAST, LIST_LAST)
-          .put(BuiltIn.LIST_LENGTH, LIST_LENGTH)
-          .put(BuiltIn.LIST_MAP, LIST_MAP)
-          .put(BuiltIn.LIST_MAP_PARTIAL, LIST_MAP_PARTIAL)
-          .put(BuiltIn.LIST_MAPI, LIST_MAPI)
-          .put(BuiltIn.LIST_NIL, ImmutableList.of())
-          .put(BuiltIn.LIST_NTH, LIST_NTH)
-          .put(BuiltIn.LIST_NULL, LIST_NULL)
-          .put(BuiltIn.LIST_PAIR_ALL, LIST_PAIR_ALL)
-          .put(BuiltIn.LIST_PAIR_ALL_EQ, LIST_PAIR_ALL_EQ)
-          .put(BuiltIn.LIST_PAIR_APP, LIST_PAIR_APP)
-          .put(BuiltIn.LIST_PAIR_APP_EQ, LIST_PAIR_APP_EQ)
-          .put(BuiltIn.LIST_PAIR_EXISTS, LIST_PAIR_EXISTS)
-          .put(BuiltIn.LIST_PAIR_FOLDL, LIST_PAIR_FOLDL)
-          .put(BuiltIn.LIST_PAIR_FOLDL_EQ, LIST_PAIR_FOLDL_EQ)
-          .put(BuiltIn.LIST_PAIR_FOLDR, LIST_PAIR_FOLDR)
-          .put(BuiltIn.LIST_PAIR_FOLDR_EQ, LIST_PAIR_FOLDR_EQ)
-          .put(BuiltIn.LIST_PAIR_MAP, LIST_PAIR_MAP)
-          .put(BuiltIn.LIST_PAIR_MAP_EQ, LIST_PAIR_MAP_EQ)
-          .put(BuiltIn.LIST_PAIR_UNZIP, LIST_PAIR_UNZIP)
-          .put(BuiltIn.LIST_PAIR_ZIP, LIST_PAIR_ZIP)
-          .put(BuiltIn.LIST_PAIR_ZIP_EQ, LIST_PAIR_ZIP_EQ)
-          .put(BuiltIn.LIST_PARTITION, LIST_PARTITION)
-          .put(BuiltIn.LIST_REV, LIST_REV)
-          .put(BuiltIn.LIST_REV_APPEND, LIST_REV_APPEND)
-          .put(BuiltIn.LIST_TABULATE, LIST_TABULATE)
-          .put(BuiltIn.LIST_TAKE, LIST_TAKE)
-          .put(BuiltIn.LIST_TL, LIST_TL)
-          .put(BuiltIn.MATH_ACOS, MATH_ACOS)
-          .put(BuiltIn.MATH_ASIN, MATH_ASIN)
-          .put(BuiltIn.MATH_ATAN, MATH_ATAN)
-          .put(BuiltIn.MATH_ATAN2, MATH_ATAN2)
-          .put(BuiltIn.MATH_COS, MATH_COS)
-          .put(BuiltIn.MATH_COSH, MATH_COSH)
-          .put(BuiltIn.MATH_E, MATH_E)
-          .put(BuiltIn.MATH_EXP, MATH_EXP)
-          .put(BuiltIn.MATH_LN, MATH_LN)
-          .put(BuiltIn.MATH_LOG10, MATH_LOG10)
-          .put(BuiltIn.MATH_PI, MATH_PI)
-          .put(BuiltIn.MATH_POW, MATH_POW)
-          .put(BuiltIn.MATH_SIN, MATH_SIN)
-          .put(BuiltIn.MATH_SINH, MATH_SINH)
-          .put(BuiltIn.MATH_SQRT, MATH_SQRT)
-          .put(BuiltIn.MATH_TAN, MATH_TAN)
-          .put(BuiltIn.MATH_TANH, MATH_TANH)
-          .put(BuiltIn.OP_CARET, OP_CARET)
-          .put(BuiltIn.OP_CONS, OP_CONS)
-          .put(BuiltIn.OP_DIV, OP_DIV)
-          .put(BuiltIn.OP_ELEM, OP_ELEM)
-          .put(BuiltIn.OP_EQ, OP_EQ)
-          .put(BuiltIn.OP_GE, OP_GE)
-          .put(BuiltIn.OP_GT, OP_GT)
-          .put(BuiltIn.OP_LE, OP_LE)
-          .put(BuiltIn.OP_LT, OP_LT)
-          .put(BuiltIn.OP_MINUS, OP_MINUS)
-          .put(BuiltIn.OP_MOD, OP_MOD)
-          .put(BuiltIn.OP_NE, OP_NE)
-          .put(BuiltIn.OP_NEGATE, OP_NEGATE)
-          .put(BuiltIn.OP_NOT_ELEM, OP_NOT_ELEM)
-          .put(BuiltIn.OP_PLUS, OP_PLUS)
-          .put(BuiltIn.OP_TIMES, OP_TIMES)
-          .put(BuiltIn.OPTION_APP, OPTION_APP)
-          .put(BuiltIn.OPTION_COMPOSE, OPTION_COMPOSE)
-          .put(BuiltIn.OPTION_COMPOSE_PARTIAL, OPTION_COMPOSE_PARTIAL)
-          .put(BuiltIn.OPTION_FILTER, OPTION_FILTER)
-          .put(BuiltIn.OPTION_GET_OPT, OPTION_GET_OPT)
-          .put(BuiltIn.OPTION_IS_SOME, OPTION_IS_SOME)
-          .put(BuiltIn.OPTION_JOIN, OPTION_JOIN)
-          .put(BuiltIn.OPTION_MAP, OPTION_MAP)
-          .put(BuiltIn.OPTION_MAP_PARTIAL, OPTION_MAP_PARTIAL)
-          .put(BuiltIn.OPTION_VAL_OF, OPTION_VAL_OF)
-          .put(BuiltIn.REAL_ABS, REAL_ABS)
-          .put(BuiltIn.REAL_CEIL, REAL_CEIL)
-          .put(BuiltIn.REAL_CHECK_FLOAT, REAL_CHECK_FLOAT)
-          .put(BuiltIn.REAL_COMPARE, REAL_COMPARE)
-          .put(BuiltIn.REAL_COPY_SIGN, REAL_COPY_SIGN)
-          .put(BuiltIn.REAL_DIVIDE, REAL_DIVIDE)
-          .put(BuiltIn.REAL_FLOOR, REAL_FLOOR)
-          .put(BuiltIn.REAL_FMT, REAL_FMT)
-          .put(BuiltIn.REAL_FROM_INT, REAL_FROM_INT)
-          .put(BuiltIn.REAL_FROM_MAN_EXP, REAL_FROM_MAN_EXP)
-          .put(BuiltIn.REAL_FROM_STRING, REAL_FROM_STRING)
-          .put(BuiltIn.REAL_IS_FINITE, REAL_IS_FINITE)
-          .put(BuiltIn.REAL_IS_NAN, REAL_IS_NAN)
-          .put(BuiltIn.REAL_IS_NORMAL, REAL_IS_NORMAL)
-          .put(BuiltIn.REAL_MAX, REAL_MAX)
-          .put(BuiltIn.REAL_MAX_FINITE, REAL_MAX_FINITE)
-          .put(BuiltIn.REAL_MIN, REAL_MIN)
-          .put(BuiltIn.REAL_MIN_NORMAL_POS, REAL_MIN_NORMAL_POS)
-          .put(BuiltIn.REAL_MIN_POS, REAL_MIN_POS)
-          .put(BuiltIn.REAL_NEG_INF, REAL_NEG_INF)
-          .put(BuiltIn.REAL_POS_INF, REAL_POS_INF)
-          .put(BuiltIn.REAL_PRECISION, REAL_PRECISION)
-          .put(BuiltIn.REAL_RADIX, REAL_RADIX)
-          .put(BuiltIn.REAL_REAL_CEIL, REAL_REAL_CEIL)
-          .put(BuiltIn.REAL_REAL_FLOOR, REAL_REAL_FLOOR)
-          .put(BuiltIn.REAL_REAL_MOD, REAL_REAL_MOD)
-          .put(BuiltIn.REAL_REAL_ROUND, REAL_REAL_ROUND)
-          .put(BuiltIn.REAL_REAL_TRUNC, REAL_REAL_TRUNC)
-          .put(BuiltIn.REAL_REM, REAL_REM)
-          .put(BuiltIn.REAL_ROUND, REAL_ROUND)
-          .put(BuiltIn.REAL_SAME_SIGN, REAL_SAME_SIGN)
-          .put(BuiltIn.REAL_SIGN, REAL_SIGN)
-          .put(BuiltIn.REAL_SIGN_BIT, REAL_SIGN_BIT)
-          .put(BuiltIn.REAL_SPLIT, REAL_SPLIT)
-          .put(BuiltIn.REAL_TO_MAN_EXP, REAL_TO_MAN_EXP)
-          .put(BuiltIn.REAL_TO_STRING, REAL_TO_STRING)
-          .put(BuiltIn.REAL_TRUNC, REAL_TRUNC)
-          .put(BuiltIn.REAL_UNORDERED, REAL_UNORDERED)
-          .put(BuiltIn.RANGE_CONTAINS, RANGE_CONTAINS)
-          .put(
-              BuiltIn.RANGE_CONTINUOUS_SET_COMPLEMENT,
-              RANGE_CONTINUOUS_SET_COMPLEMENT)
-          .put(
-              BuiltIn.RANGE_CONTINUOUS_SET_CONTAINS,
-              RANGE_CONTINUOUS_SET_CONTAINS)
-          .put(BuiltIn.RANGE_CONTINUOUS_SET_OF, RANGE_CONTINUOUS_SET_OF)
-          .put(BuiltIn.RANGE_CONTINUOUS_SET_RANGES, RANGE_CONTINUOUS_SET_RANGES)
-          .put(
-              BuiltIn.RANGE_DISCRETE_SET_COMPLEMENT,
-              RANGE_DISCRETE_SET_COMPLEMENT)
-          .put(BuiltIn.RANGE_DISCRETE_SET_CONTAINS, RANGE_DISCRETE_SET_CONTAINS)
-          .put(BuiltIn.RANGE_DISCRETE_SET_OF, RANGE_DISCRETE_SET_OF)
-          .put(BuiltIn.RANGE_DISCRETE_SET_RANGES, RANGE_DISCRETE_SET_RANGES)
-          .put(BuiltIn.RANGE_DISCRETE_SET_TO_BAG, RANGE_DISCRETE_SET_TO_BAG)
-          .put(BuiltIn.RANGE_DISCRETE_SET_TO_LIST, RANGE_DISCRETE_SET_TO_LIST)
-          .put(BuiltIn.RANGE_FLATTEN, RANGE_FLATTEN)
-          .put(BuiltIn.RELATIONAL_ARG_MAX, RELATIONAL_ARG_MAX)
-          .put(BuiltIn.RELATIONAL_ARG_MIN, RELATIONAL_ARG_MIN)
-          .put(BuiltIn.RELATIONAL_COMPARE, RELATIONAL_COMPARE)
-          .put(BuiltIn.RELATIONAL_COUNT, RELATIONAL_COUNT)
-          .put(BuiltIn.RELATIONAL_EMPTY, RELATIONAL_EMPTY)
-          .put(BuiltIn.RELATIONAL_ITERATE, RELATIONAL_ITERATE)
-          .put(BuiltIn.RELATIONAL_MAX, RELATIONAL_MAX)
-          .put(BuiltIn.RELATIONAL_MAX_BY, RELATIONAL_MAX_BY)
-          .put(BuiltIn.RELATIONAL_MIN, RELATIONAL_MIN)
-          .put(BuiltIn.RELATIONAL_MIN_BY, RELATIONAL_MIN_BY)
-          .put(BuiltIn.RELATIONAL_NON_EMPTY, RELATIONAL_NON_EMPTY)
-          .put(BuiltIn.RELATIONAL_ONLY, RELATIONAL_ONLY)
-          .put(BuiltIn.RELATIONAL_SUM, RELATIONAL_SUM)
-          .put(BuiltIn.STRING_COLLATE, STRING_COLLATE)
-          .put(BuiltIn.STRING_COMPARE, STRING_COMPARE)
-          .put(BuiltIn.STRING_CONCAT, STRING_CONCAT)
-          .put(BuiltIn.STRING_CONCAT_WITH, STRING_CONCAT_WITH)
-          .put(BuiltIn.STRING_CVT_PAD_LEFT, STRING_CVT_PAD_LEFT)
-          .put(BuiltIn.STRING_CVT_PAD_RIGHT, STRING_CVT_PAD_RIGHT)
-          .put(BuiltIn.STRING_EXPLODE, STRING_EXPLODE)
-          .put(BuiltIn.STRING_EXTRACT, STRING_EXTRACT)
-          .put(BuiltIn.STRING_FIELDS, STRING_FIELDS)
-          .put(BuiltIn.STRING_IMPLODE, STRING_IMPLODE)
-          .put2(BuiltIn.STRING_IS_PREFIX, STRING_IS_PREFIX)
-          .put(BuiltIn.STRING_IS_SUBSTRING, STRING_IS_SUBSTRING)
-          .put(BuiltIn.STRING_IS_SUFFIX, STRING_IS_SUFFIX)
-          .put(BuiltIn.STRING_MAP, STRING_MAP)
-          .put(BuiltIn.STRING_MAX_SIZE, STRING_MAX_SIZE)
-          .put(BuiltIn.STRING_OP_CARET, STRING_OP_CARET)
-          .put(BuiltIn.STRING_OP_GE, STRING_OP_GE)
-          .put(BuiltIn.STRING_OP_GT, STRING_OP_GT)
-          .put(BuiltIn.STRING_OP_LE, STRING_OP_LE)
-          .put(BuiltIn.STRING_OP_LT, STRING_OP_LT)
-          .put(BuiltIn.STRING_SIZE, STRING_SIZE)
-          .put(BuiltIn.STRING_STR, STRING_STR)
-          .put(BuiltIn.STRING_SUB, STRING_SUB)
-          .put(BuiltIn.STRING_SUBSTRING, STRING_SUBSTRING)
-          .put(BuiltIn.STRING_TOKENS, STRING_TOKENS)
-          .put(BuiltIn.STRING_TRANSLATE, STRING_TRANSLATE)
-          .put(BuiltIn.SYS_CLEAR_ENV, SYS_CLEAR_ENV)
-          .put(BuiltIn.SYS_ENV, (Macro) Codes::sysEnv)
-          // Value of Sys.file comes from Session.file, but initial value must
-          // be a List because it has (progressive) record type.
-          .put(BuiltIn.SYS_FILE, ImmutableList.of())
-          .put(BuiltIn.SYS_PARSE_TREE, SYS_PARSE_TREE)
-          .put(BuiltIn.SYS_PLAN, SYS_PLAN)
-          .put(BuiltIn.SYS_PLAN_EX, SYS_PLAN_EX)
-          .put(BuiltIn.SYS_SET, SYS_SET)
-          .put(BuiltIn.SYS_SHOW, SYS_SHOW)
-          .put(BuiltIn.SYS_SHOW_ALL, SYS_SHOW_ALL)
-          .put(BuiltIn.SYS_UNSET, SYS_UNSET)
-          .put(BuiltIn.TEST_BAG_SUM, TEST_BAG_SUM)
-          .put(BuiltIn.TEST_FOO, TEST_FOO)
-          .put(BuiltIn.TEST_LIST_SUM, TEST_LIST_SUM)
-          .put(BuiltIn.TEST_OVER_COUNT, TEST_OVER_COUNT)
-          .put(BuiltIn.TEST_OVER_SUM, TEST_OVER_SUM)
-          .put(BuiltIn.TIME_ADD, TIME_ADD)
-          .put(BuiltIn.TIME_COMPARE, TIME_COMPARE)
-          .put(BuiltIn.TIME_FMT, TIME_FMT)
-          .put(BuiltIn.TIME_FROM_MICROSECONDS, TIME_FROM_MICROSECONDS)
-          .put(BuiltIn.TIME_FROM_MILLISECONDS, TIME_FROM_MILLISECONDS)
-          .put(BuiltIn.TIME_FROM_NANOSECONDS, TIME_FROM_NANOSECONDS)
-          .put(BuiltIn.TIME_FROM_REAL, TIME_FROM_REAL)
-          .put(BuiltIn.TIME_FROM_SECONDS, TIME_FROM_SECONDS)
-          .put(BuiltIn.TIME_FROM_STRING, TIME_FROM_STRING)
-          .put(BuiltIn.TIME_GE, TIME_GE)
-          .put(BuiltIn.TIME_GT, TIME_GT)
-          .put(BuiltIn.TIME_LE, TIME_LE)
-          .put(BuiltIn.TIME_LT, TIME_LT)
-          .put(BuiltIn.TIME_NOW, TIME_NOW)
-          .put(BuiltIn.TIME_SUBTRACT, TIME_SUBTRACT)
-          .put(BuiltIn.TIME_TO_MICROSECONDS, TIME_TO_MICROSECONDS)
-          .put(BuiltIn.TIME_TO_MILLISECONDS, TIME_TO_MILLISECONDS)
-          .put(BuiltIn.TIME_TO_NANOSECONDS, TIME_TO_NANOSECONDS)
-          .put(BuiltIn.TIME_TO_REAL, TIME_TO_REAL)
-          .put(BuiltIn.TIME_TO_SECONDS, TIME_TO_SECONDS)
-          .put(BuiltIn.TIME_TO_STRING, TIME_TO_STRING)
-          .put(BuiltIn.TIME_ZERO_TIME, TIME_ZERO_TIME)
-          .put(BuiltIn.VARIANT_PARSE, VARIANT_PARSE)
-          .put(BuiltIn.VARIANT_PRINT, VARIANT_PRINT)
-          .put(BuiltIn.VECTOR_ALL, VECTOR_ALL)
-          .put(BuiltIn.VECTOR_APP, VECTOR_APP)
-          .put(BuiltIn.VECTOR_APPI, VECTOR_APPI)
-          .put(BuiltIn.VECTOR_COLLATE, VECTOR_COLLATE)
-          .put(BuiltIn.VECTOR_CONCAT, VECTOR_CONCAT)
-          .put(BuiltIn.VECTOR_EXISTS, VECTOR_EXISTS)
-          .put(BuiltIn.VECTOR_FIND, VECTOR_FIND)
-          .put(BuiltIn.VECTOR_FINDI, VECTOR_FINDI)
-          .put(BuiltIn.VECTOR_FOLDL, VECTOR_FOLDL)
-          .put(BuiltIn.VECTOR_FOLDLI, VECTOR_FOLDLI)
-          .put(BuiltIn.VECTOR_FOLDR, VECTOR_FOLDR)
-          .put(BuiltIn.VECTOR_FOLDRI, VECTOR_FOLDRI)
-          .put(BuiltIn.VECTOR_FROM_LIST, VECTOR_FROM_LIST)
-          .put(BuiltIn.VECTOR_LENGTH, VECTOR_LENGTH)
-          .put(BuiltIn.VECTOR_MAP, VECTOR_MAP)
-          .put(BuiltIn.VECTOR_MAPI, VECTOR_MAPI)
-          .put(BuiltIn.VECTOR_MAX_LEN, VECTOR_MAX_LEN)
-          .put(BuiltIn.VECTOR_SUB, VECTOR_SUB)
-          .put(BuiltIn.VECTOR_TABULATE, VECTOR_TABULATE)
-          .put(BuiltIn.VECTOR_UPDATE, VECTOR_UPDATE)
-          .put(BuiltIn.Z_ANDALSO, Unit.INSTANCE)
-          .put(BuiltIn.Z_CURRENT, Unit.INSTANCE)
-          .put(BuiltIn.Z_ELEMENTS, Unit.INSTANCE)
-          .put(BuiltIn.Z_EXTENT, Z_EXTENT)
-          .put(BuiltIn.Z_LIST, Z_LIST)
-          .put(BuiltIn.Z_MINUS_INT, Z_MINUS_INT)
-          .put(BuiltIn.Z_MINUS_REAL, Z_MINUS_REAL)
-          .put(BuiltIn.Z_NEGATE_INT, Z_NEGATE_INT)
-          .put(BuiltIn.Z_NEGATE_REAL, Z_NEGATE_REAL)
-          .put(BuiltIn.Z_NTH, Unit.INSTANCE)
-          .put(BuiltIn.Z_ORDINAL, 0)
-          .put(BuiltIn.Z_ORELSE, Unit.INSTANCE)
-          .put(BuiltIn.Z_PLUS_INT, Z_PLUS_INT)
-          .put(BuiltIn.Z_PLUS_REAL, Z_PLUS_REAL)
-          .put(BuiltIn.Z_SUM_INT, Z_SUM_INT)
-          .put(BuiltIn.Z_SUM_REAL, Z_SUM_REAL)
-          .put(BuiltIn.Z_TEST_OVER_COUNT_BAG, Z_TEST_OVER_COUNT_BAG)
-          .put(BuiltIn.Z_TEST_OVER_COUNT_LIST, Z_TEST_OVER_COUNT_LIST)
-          .put(BuiltIn.Z_TIMES_INT, Z_TIMES_INT)
-          .put(BuiltIn.Z_TIMES_REAL, Z_TIMES_REAL)
-          .put(BuiltIn.Z_TY_CON, Unit.INSTANCE)
-          .build();
+  public static final ImmutableMap<BuiltIn, Object> BUILT_IN_VALUES;
+
+  static {
+    final PairList<BuiltIn, Object> b = PairList.of();
+    // lint: sort until '#}' where '##b\.add\(BuiltIn' erase 'b\.'
+    b.add(BuiltIn.ABS, ABS);
+    b.add(BuiltIn.BAG_ALL, BAG_ALL);
+    b.add(BuiltIn.BAG_APP, BAG_APP);
+    b.add(BuiltIn.BAG_AT, BAG_AT);
+    b.add(BuiltIn.BAG_CONCAT, BAG_CONCAT);
+    b.add(BuiltIn.BAG_DROP, BAG_DROP);
+    b.add(BuiltIn.BAG_EXISTS, BAG_EXISTS);
+    b.add(BuiltIn.BAG_FILTER, BAG_FILTER);
+    b.add(BuiltIn.BAG_FIND, BAG_FIND);
+    b.add(BuiltIn.BAG_FOLD, BAG_FOLD);
+    b.add(BuiltIn.BAG_FROM_LIST, BAG_FROM_LIST);
+    b.add(BuiltIn.BAG_GET_ITEM, BAG_GET_ITEM);
+    b.add(BuiltIn.BAG_HD, BAG_HD);
+    b.add(BuiltIn.BAG_LENGTH, BAG_LENGTH);
+    b.add(BuiltIn.BAG_MAP, BAG_MAP);
+    b.add(BuiltIn.BAG_MAP_PARTIAL, BAG_MAP_PARTIAL);
+    b.add(BuiltIn.BAG_NIL, ImmutableList.of());
+    b.add(BuiltIn.BAG_NTH, BAG_NTH);
+    b.add(BuiltIn.BAG_NULL, BAG_NULL);
+    b.add(BuiltIn.BAG_ONLY, BAG_ONLY);
+    b.add(BuiltIn.BAG_PARTITION, BAG_PARTITION);
+    b.add(BuiltIn.BAG_TABULATE, BAG_TABULATE);
+    b.add(BuiltIn.BAG_TAKE, BAG_TAKE);
+    b.add(BuiltIn.BAG_TL, BAG_TL);
+    b.add(BuiltIn.BAG_TO_LIST, BAG_TO_LIST);
+    b.add(BuiltIn.BOOL_ANDALSO, BOOL_ANDALSO);
+    b.add(BuiltIn.BOOL_FROM_STRING, BOOL_FROM_STRING);
+    b.add(BuiltIn.BOOL_IMPLIES, BOOL_IMPLIES);
+    b.add(BuiltIn.BOOL_NOT, BOOL_NOT);
+    b.add(BuiltIn.BOOL_OP_EQ, BOOL_OP_EQ);
+    b.add(BuiltIn.BOOL_OP_GT, BOOL_OP_GT);
+    b.add(BuiltIn.BOOL_OP_LT, BOOL_OP_LT);
+    b.add(BuiltIn.BOOL_OP_NE, BOOL_OP_NE);
+    b.add(BuiltIn.BOOL_ORELSE, BOOL_ORELSE);
+    b.add(BuiltIn.BOOL_TO_STRING, BOOL_TO_STRING);
+    b.add(BuiltIn.CHAR_CHR, CHAR_CHR);
+    b.add(BuiltIn.CHAR_COMPARE, CHAR_COMPARE);
+    b.add(BuiltIn.CHAR_CONTAINS, CHAR_CONTAINS);
+    b.add(BuiltIn.CHAR_FROM_CSTRING, CHAR_FROM_CSTRING);
+    b.add(BuiltIn.CHAR_FROM_INT, CHAR_FROM_INT);
+    b.add(BuiltIn.CHAR_FROM_STRING, CHAR_FROM_STRING);
+    b.add(BuiltIn.CHAR_IS_ALPHA, CHAR_IS_ALPHA);
+    b.add(BuiltIn.CHAR_IS_ALPHA_NUM, CHAR_IS_ALPHA_NUM);
+    b.add(BuiltIn.CHAR_IS_ASCII, CHAR_IS_ASCII);
+    b.add(BuiltIn.CHAR_IS_CNTRL, CHAR_IS_CNTRL);
+    b.add(BuiltIn.CHAR_IS_DIGIT, CHAR_IS_DIGIT);
+    b.add(BuiltIn.CHAR_IS_GRAPH, CHAR_IS_GRAPH);
+    b.add(BuiltIn.CHAR_IS_HEX_DIGIT, CHAR_IS_HEX_DIGIT);
+    b.add(BuiltIn.CHAR_IS_LOWER, CHAR_IS_LOWER);
+    b.add(BuiltIn.CHAR_IS_OCT_DIGIT, CHAR_IS_OCT_DIGIT);
+    b.add(BuiltIn.CHAR_IS_PRINT, CHAR_IS_PRINT);
+    b.add(BuiltIn.CHAR_IS_PUNCT, CHAR_IS_PUNCT);
+    b.add(BuiltIn.CHAR_IS_SPACE, CHAR_IS_SPACE);
+    b.add(BuiltIn.CHAR_IS_UPPER, CHAR_IS_UPPER);
+    b.add(BuiltIn.CHAR_MAX_CHAR, CHAR_MAX_CHAR);
+    b.add(BuiltIn.CHAR_MAX_ORD, CHAR_MAX_ORD);
+    b.add(BuiltIn.CHAR_MIN_CHAR, CHAR_MIN_CHAR);
+    b.add(BuiltIn.CHAR_NOT_CONTAINS, CHAR_NOT_CONTAINS);
+    b.add(BuiltIn.CHAR_OP_EQ, CHAR_OP_EQ);
+    b.add(BuiltIn.CHAR_OP_GE, CHAR_OP_GE);
+    b.add(BuiltIn.CHAR_OP_GT, CHAR_OP_GT);
+    b.add(BuiltIn.CHAR_OP_LE, CHAR_OP_LE);
+    b.add(BuiltIn.CHAR_OP_LT, CHAR_OP_LT);
+    b.add(BuiltIn.CHAR_OP_NE, CHAR_OP_NE);
+    b.add(BuiltIn.CHAR_ORD, CHAR_ORD);
+    b.add(BuiltIn.CHAR_PRED, CHAR_PRED);
+    b.add(BuiltIn.CHAR_SUCC, CHAR_SUCC);
+    b.add(BuiltIn.CHAR_TO_CSTRING, CHAR_TO_CSTRING);
+    b.add(BuiltIn.CHAR_TO_LOWER, CHAR_TO_LOWER);
+    b.add(BuiltIn.CHAR_TO_STRING, CHAR_TO_STRING);
+    b.add(BuiltIn.CHAR_TO_UPPER, CHAR_TO_UPPER);
+    b.add(BuiltIn.DATALOG_EXECUTE, DATALOG_EXECUTE);
+    b.add(BuiltIn.DATALOG_TRANSLATE, DATALOG_TRANSLATE);
+    b.add(BuiltIn.DATALOG_VALIDATE, DATALOG_VALIDATE);
+    b.add(BuiltIn.DATE_COMPARE, DATE_COMPARE);
+    b.add(BuiltIn.DATE_DATE, DATE_DATE);
+    b.add(BuiltIn.DATE_DAY, DATE_DAY);
+    b.add(BuiltIn.DATE_FMT, DATE_FMT);
+    b.add(BuiltIn.DATE_FROM_STRING, DATE_FROM_STRING);
+    b.add(BuiltIn.DATE_FROM_TIME_LOCAL, DATE_FROM_TIME_LOCAL);
+    b.add(BuiltIn.DATE_FROM_TIME_UNIV, DATE_FROM_TIME_UNIV);
+    b.add(BuiltIn.DATE_HOUR, DATE_HOUR);
+    b.add(BuiltIn.DATE_IS_DST, DATE_IS_DST);
+    b.add(BuiltIn.DATE_LOCAL_OFFSET, DATE_LOCAL_OFFSET);
+    b.add(BuiltIn.DATE_MINUTE, DATE_MINUTE);
+    b.add(BuiltIn.DATE_MONTH_FN, DATE_MONTH_FN);
+    b.add(BuiltIn.DATE_SECOND, DATE_SECOND);
+    b.add(BuiltIn.DATE_TO_STRING, DATE_TO_STRING);
+    b.add(BuiltIn.DATE_TO_TIME, DATE_TO_TIME);
+    b.add(BuiltIn.DATE_WEEK_DAY, DATE_WEEK_DAY);
+    b.add(BuiltIn.DATE_YEAR, DATE_YEAR);
+    b.add(BuiltIn.DATE_YEAR_DAY, DATE_YEAR_DAY);
+    b.add(BuiltIn.EITHER_APP, EITHER_APP);
+    b.add(BuiltIn.EITHER_APP_LEFT, EITHER_APP_LEFT);
+    b.add(BuiltIn.EITHER_APP_RIGHT, EITHER_APP_RIGHT);
+    b.add(BuiltIn.EITHER_AS_LEFT, EITHER_AS_LEFT);
+    b.add(BuiltIn.EITHER_AS_RIGHT, EITHER_AS_RIGHT);
+    b.add(BuiltIn.EITHER_FOLD, EITHER_FOLD);
+    b.add(BuiltIn.EITHER_IS_LEFT, EITHER_IS_LEFT);
+    b.add(BuiltIn.EITHER_IS_RIGHT, EITHER_IS_RIGHT);
+    b.add(BuiltIn.EITHER_MAP, EITHER_MAP);
+    b.add(BuiltIn.EITHER_MAP_LEFT, EITHER_MAP_LEFT);
+    b.add(BuiltIn.EITHER_MAP_RIGHT, EITHER_MAP_RIGHT);
+    b.add(BuiltIn.EITHER_PARTITION, EITHER_PARTITION);
+    b.add(BuiltIn.EITHER_PROJ, EITHER_PROJ);
+    b.add(BuiltIn.FN_APPLY, FN_APPLY);
+    b.add(BuiltIn.FN_CONST, FN_CONST);
+    b.add(BuiltIn.FN_CURRY, FN_CURRY);
+    b.add(BuiltIn.FN_EQUAL, FN_EQUAL);
+    b.add(BuiltIn.FN_FLIP, FN_FLIP);
+    b.add(BuiltIn.FN_ID, FN_ID);
+    b.add(BuiltIn.FN_NOT_EQUAL, FN_NOT_EQUAL);
+    b.add(BuiltIn.FN_O, FN_OP_O);
+    b.add(BuiltIn.FN_REPEAT, FN_REPEAT);
+    b.add(BuiltIn.FN_UNCURRY, FN_UNCURRY);
+    b.add(BuiltIn.GENERAL_BEFORE, GENERAL_BEFORE);
+    b.add(BuiltIn.GENERAL_EXN_MESSAGE, GENERAL_EXN_MESSAGE);
+    b.add(BuiltIn.GENERAL_EXN_NAME, GENERAL_EXN_NAME);
+    b.add(BuiltIn.GENERAL_IGNORE, GENERAL_IGNORE);
+    b.add(BuiltIn.GENERAL_O, GENERAL_OP_O);
+    b.add(BuiltIn.INT_ABS, INT_ABS);
+    b.add(BuiltIn.INT_COMPARE, INT_COMPARE);
+    b.add(BuiltIn.INT_DIV, INT_DIV);
+    b.add(BuiltIn.INT_FMT, INT_FMT);
+    b.add(BuiltIn.INT_FROM_INT, INT_FROM_INT);
+    b.add(BuiltIn.INT_FROM_LARGE, INT_FROM_LARGE);
+    b.add(BuiltIn.INT_FROM_STRING, INT_FROM_STRING);
+    b.add(BuiltIn.INT_MAX, INT_MAX);
+    b.add(BuiltIn.INT_MAX_INT, INT_MAX_INT);
+    b.add(BuiltIn.INT_MIN, INT_MIN);
+    b.add(BuiltIn.INT_MIN_INT, INT_MIN_INT);
+    b.add(BuiltIn.INT_MOD, INT_MOD);
+    b.add(BuiltIn.INT_OP_GE, INT_OP_GE);
+    b.add(BuiltIn.INT_OP_GT, INT_OP_GT);
+    b.add(BuiltIn.INT_OP_LE, INT_OP_LE);
+    b.add(BuiltIn.INT_OP_LT, INT_OP_LT);
+    b.add(BuiltIn.INT_OP_MINUS, INT_OP_MINUS);
+    b.add(BuiltIn.INT_OP_NEGATE, INT_OP_NEGATE);
+    b.add(BuiltIn.INT_OP_PLUS, INT_OP_PLUS);
+    b.add(BuiltIn.INT_OP_TIMES, INT_OP_TIMES);
+    b.add(BuiltIn.INT_PRECISION, INT_PRECISION);
+    b.add(BuiltIn.INT_QUOT, INT_QUOT);
+    b.add(BuiltIn.INT_REM, INT_REM);
+    b.add(BuiltIn.INT_SAME_SIGN, INT_SAME_SIGN);
+    b.add(BuiltIn.INT_SIGN, INT_SIGN);
+    b.add(BuiltIn.INT_TO_INT, INT_TO_INT);
+    b.add(BuiltIn.INT_TO_LARGE, INT_TO_LARGE);
+    b.add(BuiltIn.INT_TO_STRING, INT_TO_STRING);
+    b.add(BuiltIn.INTERACT_USE, INTERACT_USE);
+    b.add(BuiltIn.INTERACT_USE_SILENTLY, INTERACT_USE_SILENTLY);
+    b.add(BuiltIn.LIST_ALL, LIST_ALL);
+    b.add(BuiltIn.LIST_APP, LIST_APP);
+    b.add(BuiltIn.LIST_AT, LIST_AT);
+    b.add(BuiltIn.LIST_COLLATE, LIST_COLLATE);
+    b.add(BuiltIn.LIST_CONCAT, LIST_CONCAT);
+    b.add(BuiltIn.LIST_DROP, LIST_DROP);
+    b.add(BuiltIn.LIST_EXCEPT, LIST_EXCEPT);
+    b.add(BuiltIn.LIST_EXISTS, LIST_EXISTS);
+    b.add(BuiltIn.LIST_FILTER, LIST_FILTER);
+    b.add(BuiltIn.LIST_FIND, LIST_FIND);
+    b.add(BuiltIn.LIST_FOLDL, LIST_FOLDL);
+    b.add(BuiltIn.LIST_FOLDR, LIST_FOLDR);
+    b.add(BuiltIn.LIST_GET_ITEM, LIST_GET_ITEM);
+    b.add(BuiltIn.LIST_HD, LIST_HD);
+    b.add(BuiltIn.LIST_INTERSECT, LIST_INTERSECT);
+    b.add(BuiltIn.LIST_LAST, LIST_LAST);
+    b.add(BuiltIn.LIST_LENGTH, LIST_LENGTH);
+    b.add(BuiltIn.LIST_MAP, LIST_MAP);
+    b.add(BuiltIn.LIST_MAP_PARTIAL, LIST_MAP_PARTIAL);
+    b.add(BuiltIn.LIST_MAPI, LIST_MAPI);
+    b.add(BuiltIn.LIST_NIL, ImmutableList.of());
+    b.add(BuiltIn.LIST_NTH, LIST_NTH);
+    b.add(BuiltIn.LIST_NULL, LIST_NULL);
+    b.add(BuiltIn.LIST_ONLY, LIST_ONLY);
+    b.add(BuiltIn.LIST_PAIR_ALL, LIST_PAIR_ALL);
+    b.add(BuiltIn.LIST_PAIR_ALL_EQ, LIST_PAIR_ALL_EQ);
+    b.add(BuiltIn.LIST_PAIR_APP, LIST_PAIR_APP);
+    b.add(BuiltIn.LIST_PAIR_APP_EQ, LIST_PAIR_APP_EQ);
+    b.add(BuiltIn.LIST_PAIR_EXISTS, LIST_PAIR_EXISTS);
+    b.add(BuiltIn.LIST_PAIR_FOLDL, LIST_PAIR_FOLDL);
+    b.add(BuiltIn.LIST_PAIR_FOLDL_EQ, LIST_PAIR_FOLDL_EQ);
+    b.add(BuiltIn.LIST_PAIR_FOLDR, LIST_PAIR_FOLDR);
+    b.add(BuiltIn.LIST_PAIR_FOLDR_EQ, LIST_PAIR_FOLDR_EQ);
+    b.add(BuiltIn.LIST_PAIR_MAP, LIST_PAIR_MAP);
+    b.add(BuiltIn.LIST_PAIR_MAP_EQ, LIST_PAIR_MAP_EQ);
+    b.add(BuiltIn.LIST_PAIR_UNZIP, LIST_PAIR_UNZIP);
+    b.add(BuiltIn.LIST_PAIR_ZIP, LIST_PAIR_ZIP);
+    b.add(BuiltIn.LIST_PAIR_ZIP_EQ, LIST_PAIR_ZIP_EQ);
+    b.add(BuiltIn.LIST_PARTITION, LIST_PARTITION);
+    b.add(BuiltIn.LIST_REV, LIST_REV);
+    b.add(BuiltIn.LIST_REV_APPEND, LIST_REV_APPEND);
+    b.add(BuiltIn.LIST_TABULATE, LIST_TABULATE);
+    b.add(BuiltIn.LIST_TAKE, LIST_TAKE);
+    b.add(BuiltIn.LIST_TL, LIST_TL);
+    b.add(BuiltIn.MATH_ACOS, MATH_ACOS);
+    b.add(BuiltIn.MATH_ASIN, MATH_ASIN);
+    b.add(BuiltIn.MATH_ATAN, MATH_ATAN);
+    b.add(BuiltIn.MATH_ATAN2, MATH_ATAN2);
+    b.add(BuiltIn.MATH_COS, MATH_COS);
+    b.add(BuiltIn.MATH_COSH, MATH_COSH);
+    b.add(BuiltIn.MATH_E, MATH_E);
+    b.add(BuiltIn.MATH_EXP, MATH_EXP);
+    b.add(BuiltIn.MATH_LN, MATH_LN);
+    b.add(BuiltIn.MATH_LOG10, MATH_LOG10);
+    b.add(BuiltIn.MATH_PI, MATH_PI);
+    b.add(BuiltIn.MATH_POW, MATH_POW);
+    b.add(BuiltIn.MATH_SIN, MATH_SIN);
+    b.add(BuiltIn.MATH_SINH, MATH_SINH);
+    b.add(BuiltIn.MATH_SQRT, MATH_SQRT);
+    b.add(BuiltIn.MATH_TAN, MATH_TAN);
+    b.add(BuiltIn.MATH_TANH, MATH_TANH);
+    b.add(BuiltIn.OP_CONS, OP_CONS);
+    b.add(BuiltIn.OP_DIV, OP_DIV);
+    b.add(BuiltIn.OP_ELEM, OP_ELEM);
+    b.add(BuiltIn.OP_EQ, OP_EQ);
+    b.add(BuiltIn.OP_GE, OP_GE);
+    b.add(BuiltIn.OP_GT, OP_GT);
+    b.add(BuiltIn.OP_LE, OP_LE);
+    b.add(BuiltIn.OP_LT, OP_LT);
+    b.add(BuiltIn.OP_MINUS, OP_MINUS);
+    b.add(BuiltIn.OP_MOD, OP_MOD);
+    b.add(BuiltIn.OP_NE, OP_NE);
+    b.add(BuiltIn.OP_NEGATE, OP_NEGATE);
+    b.add(BuiltIn.OP_NOT_ELEM, OP_NOT_ELEM);
+    b.add(BuiltIn.OP_PLUS, OP_PLUS);
+    b.add(BuiltIn.OP_TIMES, OP_TIMES);
+    b.add(BuiltIn.OPTION_APP, OPTION_APP);
+    b.add(BuiltIn.OPTION_COMPOSE, OPTION_COMPOSE);
+    b.add(BuiltIn.OPTION_COMPOSE_PARTIAL, OPTION_COMPOSE_PARTIAL);
+    b.add(BuiltIn.OPTION_FILTER, OPTION_FILTER);
+    b.add(BuiltIn.OPTION_GET_OPT, OPTION_GET_OPT);
+    b.add(BuiltIn.OPTION_IS_SOME, OPTION_IS_SOME);
+    b.add(BuiltIn.OPTION_JOIN, OPTION_JOIN);
+    b.add(BuiltIn.OPTION_MAP, OPTION_MAP);
+    b.add(BuiltIn.OPTION_MAP_PARTIAL, OPTION_MAP_PARTIAL);
+    b.add(BuiltIn.OPTION_VAL_OF, OPTION_VAL_OF);
+    b.add(BuiltIn.PP_ALIGN, PP_ALIGN);
+    b.add(BuiltIn.PP_BESIDE, PP_BESIDE);
+    b.add(BuiltIn.PP_BRACES, PP_BRACES);
+    b.add(BuiltIn.PP_BRACKETS, PP_BRACKETS);
+    b.add(BuiltIn.PP_CAT, PP_CAT);
+    b.add(BuiltIn.PP_EMPTY, PP_EMPTY);
+    b.add(BuiltIn.PP_ENCLOSE_SEP, PP_ENCLOSE_SEP);
+    b.add(BuiltIn.PP_FILL_CAT, PP_FILL_CAT);
+    b.add(BuiltIn.PP_FILL_SEP, PP_FILL_SEP);
+    b.add(BuiltIn.PP_GROUP, PP_GROUP);
+    b.add(BuiltIn.PP_HANG, PP_HANG);
+    b.add(BuiltIn.PP_HARD_LINE, PP_HARD_LINE);
+    b.add(BuiltIn.PP_HCAT, PP_HCAT);
+    b.add(BuiltIn.PP_HSEP, PP_HSEP);
+    b.add(BuiltIn.PP_INDENT, PP_INDENT);
+    b.add(BuiltIn.PP_LINE, PP_LINE);
+    b.add(BuiltIn.PP_LINE_BREAK, PP_LINE_BREAK);
+    b.add(BuiltIn.PP_NEST, PP_NEST);
+    b.add(BuiltIn.PP_PARENS, PP_PARENS);
+    b.add(BuiltIn.PP_PUNCTUATE, PP_PUNCTUATE);
+    b.add(BuiltIn.PP_RENDER, PP_RENDER);
+    b.add(BuiltIn.PP_SEP, PP_SEP);
+    b.add(BuiltIn.PP_SOFT_BREAK, PP_SOFT_BREAK);
+    b.add(BuiltIn.PP_SOFT_LINE, PP_SOFT_LINE);
+    b.add(BuiltIn.PP_TEXT, PP_TEXT);
+    b.add(BuiltIn.PP_VCAT, PP_VCAT);
+    b.add(BuiltIn.PP_VSEP, PP_VSEP);
+    b.add(BuiltIn.RANGE_CONTAINS, RANGE_CONTAINS);
+    b.add(
+        BuiltIn.RANGE_CONTINUOUS_SET_COMPLEMENT,
+        RANGE_CONTINUOUS_SET_COMPLEMENT);
+    b.add(BuiltIn.RANGE_CONTINUOUS_SET_CONTAINS, RANGE_CONTINUOUS_SET_CONTAINS);
+    b.add(BuiltIn.RANGE_CONTINUOUS_SET_OF, RANGE_CONTINUOUS_SET_OF);
+    b.add(BuiltIn.RANGE_CONTINUOUS_SET_RANGES, RANGE_CONTINUOUS_SET_RANGES);
+    b.add(BuiltIn.RANGE_DISCRETE_SET_COMPLEMENT, RANGE_DISCRETE_SET_COMPLEMENT);
+    b.add(BuiltIn.RANGE_DISCRETE_SET_CONTAINS, RANGE_DISCRETE_SET_CONTAINS);
+    b.add(BuiltIn.RANGE_DISCRETE_SET_OF, RANGE_DISCRETE_SET_OF);
+    b.add(BuiltIn.RANGE_DISCRETE_SET_RANGES, RANGE_DISCRETE_SET_RANGES);
+    b.add(BuiltIn.RANGE_DISCRETE_SET_TO_BAG, RANGE_DISCRETE_SET_TO_BAG);
+    b.add(BuiltIn.RANGE_DISCRETE_SET_TO_LIST, RANGE_DISCRETE_SET_TO_LIST);
+    b.add(BuiltIn.RANGE_FLATTEN, RANGE_FLATTEN);
+    b.add(BuiltIn.REAL_ABS, REAL_ABS);
+    b.add(BuiltIn.REAL_CEIL, REAL_CEIL);
+    b.add(BuiltIn.REAL_CHECK_FLOAT, REAL_CHECK_FLOAT);
+    b.add(BuiltIn.REAL_COMPARE, REAL_COMPARE);
+    b.add(BuiltIn.REAL_COPY_SIGN, REAL_COPY_SIGN);
+    b.add(BuiltIn.REAL_DIVIDE, REAL_DIVIDE);
+    b.add(BuiltIn.REAL_FLOOR, REAL_FLOOR);
+    b.add(BuiltIn.REAL_FMT, REAL_FMT);
+    b.add(BuiltIn.REAL_FROM_INT, REAL_FROM_INT);
+    b.add(BuiltIn.REAL_FROM_MAN_EXP, REAL_FROM_MAN_EXP);
+    b.add(BuiltIn.REAL_FROM_STRING, REAL_FROM_STRING);
+    b.add(BuiltIn.REAL_IS_FINITE, REAL_IS_FINITE);
+    b.add(BuiltIn.REAL_IS_NAN, REAL_IS_NAN);
+    b.add(BuiltIn.REAL_IS_NORMAL, REAL_IS_NORMAL);
+    b.add(BuiltIn.REAL_MAX, REAL_MAX);
+    b.add(BuiltIn.REAL_MAX_FINITE, REAL_MAX_FINITE);
+    b.add(BuiltIn.REAL_MIN, REAL_MIN);
+    b.add(BuiltIn.REAL_MIN_NORMAL_POS, REAL_MIN_NORMAL_POS);
+    b.add(BuiltIn.REAL_MIN_POS, REAL_MIN_POS);
+    b.add(BuiltIn.REAL_NEG_INF, REAL_NEG_INF);
+    b.add(BuiltIn.REAL_OP_EQ, REAL_OP_EQ);
+    b.add(BuiltIn.REAL_OP_GE, REAL_OP_GE);
+    b.add(BuiltIn.REAL_OP_GT, REAL_OP_GT);
+    b.add(BuiltIn.REAL_OP_LE, REAL_OP_LE);
+    b.add(BuiltIn.REAL_OP_LT, REAL_OP_LT);
+    b.add(BuiltIn.REAL_OP_MINUS, REAL_OP_MINUS);
+    b.add(BuiltIn.REAL_OP_NE, REAL_OP_NE);
+    b.add(BuiltIn.REAL_OP_NEGATE, REAL_OP_NEGATE);
+    b.add(BuiltIn.REAL_OP_PLUS, REAL_OP_PLUS);
+    b.add(BuiltIn.REAL_OP_TIMES, REAL_OP_TIMES);
+    b.add(BuiltIn.REAL_POS_INF, REAL_POS_INF);
+    b.add(BuiltIn.REAL_PRECISION, REAL_PRECISION);
+    b.add(BuiltIn.REAL_RADIX, REAL_RADIX);
+    b.add(BuiltIn.REAL_REAL_CEIL, REAL_REAL_CEIL);
+    b.add(BuiltIn.REAL_REAL_FLOOR, REAL_REAL_FLOOR);
+    b.add(BuiltIn.REAL_REAL_MOD, REAL_REAL_MOD);
+    b.add(BuiltIn.REAL_REAL_ROUND, REAL_REAL_ROUND);
+    b.add(BuiltIn.REAL_REAL_TRUNC, REAL_REAL_TRUNC);
+    b.add(BuiltIn.REAL_REM, REAL_REM);
+    b.add(BuiltIn.REAL_ROUND, REAL_ROUND);
+    b.add(BuiltIn.REAL_SAME_SIGN, REAL_SAME_SIGN);
+    b.add(BuiltIn.REAL_SIGN, REAL_SIGN);
+    b.add(BuiltIn.REAL_SIGN_BIT, REAL_SIGN_BIT);
+    b.add(BuiltIn.REAL_SPLIT, REAL_SPLIT);
+    b.add(BuiltIn.REAL_TO_MAN_EXP, REAL_TO_MAN_EXP);
+    b.add(BuiltIn.REAL_TO_STRING, REAL_TO_STRING);
+    b.add(BuiltIn.REAL_TRUNC, REAL_TRUNC);
+    b.add(BuiltIn.REAL_UNORDERED, REAL_UNORDERED);
+    b.add(BuiltIn.RELATIONAL_ARG_MAX, RELATIONAL_ARG_MAX);
+    b.add(BuiltIn.RELATIONAL_ARG_MIN, RELATIONAL_ARG_MIN);
+    b.add(BuiltIn.RELATIONAL_COMPARE, RELATIONAL_COMPARE);
+    b.add(BuiltIn.RELATIONAL_COUNT, RELATIONAL_COUNT);
+    b.add(BuiltIn.RELATIONAL_EMPTY, RELATIONAL_EMPTY);
+    b.add(BuiltIn.RELATIONAL_ITERATE, RELATIONAL_ITERATE);
+    b.add(BuiltIn.RELATIONAL_MAX, RELATIONAL_MAX);
+    b.add(BuiltIn.RELATIONAL_MAX_BY, RELATIONAL_MAX_BY);
+    b.add(BuiltIn.RELATIONAL_MIN, RELATIONAL_MIN);
+    b.add(BuiltIn.RELATIONAL_MIN_BY, RELATIONAL_MIN_BY);
+    b.add(BuiltIn.RELATIONAL_NON_EMPTY, RELATIONAL_NON_EMPTY);
+    b.add(BuiltIn.RELATIONAL_ONLY, RELATIONAL_ONLY);
+    b.add(BuiltIn.RELATIONAL_SUM, RELATIONAL_SUM);
+    b.add(BuiltIn.STRING_COLLATE, STRING_COLLATE);
+    b.add(BuiltIn.STRING_COMPARE, STRING_COMPARE);
+    b.add(BuiltIn.STRING_CONCAT, STRING_CONCAT);
+    b.add(BuiltIn.STRING_CONCAT_WITH, STRING_CONCAT_WITH);
+    b.add(BuiltIn.STRING_CVT_PAD_LEFT, STRING_CVT_PAD_LEFT);
+    b.add(BuiltIn.STRING_CVT_PAD_RIGHT, STRING_CVT_PAD_RIGHT);
+    b.add(BuiltIn.STRING_EXPLODE, STRING_EXPLODE);
+    b.add(BuiltIn.STRING_EXTRACT, STRING_EXTRACT);
+    b.add(BuiltIn.STRING_FIELDS, STRING_FIELDS);
+    b.add(BuiltIn.STRING_IMPLODE, STRING_IMPLODE);
+    b.add(BuiltIn.STRING_IS_PREFIX, STRING_IS_PREFIX);
+    b.add(BuiltIn.STRING_IS_SUBSTRING, STRING_IS_SUBSTRING);
+    b.add(BuiltIn.STRING_IS_SUFFIX, STRING_IS_SUFFIX);
+    b.add(BuiltIn.STRING_MAP, STRING_MAP);
+    b.add(BuiltIn.STRING_MAX_SIZE, STRING_MAX_SIZE);
+    b.add(BuiltIn.STRING_OP_CARET, STRING_OP_CARET);
+    b.add(BuiltIn.STRING_OP_EQ, STRING_OP_EQ);
+    b.add(BuiltIn.STRING_OP_GE, STRING_OP_GE);
+    b.add(BuiltIn.STRING_OP_GT, STRING_OP_GT);
+    b.add(BuiltIn.STRING_OP_LE, STRING_OP_LE);
+    b.add(BuiltIn.STRING_OP_LT, STRING_OP_LT);
+    b.add(BuiltIn.STRING_OP_NE, STRING_OP_NE);
+    b.add(BuiltIn.STRING_SIZE, STRING_SIZE);
+    b.add(BuiltIn.STRING_STR, STRING_STR);
+    b.add(BuiltIn.STRING_SUB, STRING_SUB);
+    b.add(BuiltIn.STRING_SUBSTRING, STRING_SUBSTRING);
+    b.add(BuiltIn.STRING_TOKENS, STRING_TOKENS);
+    b.add(BuiltIn.STRING_TRANSLATE, STRING_TRANSLATE);
+    b.add(BuiltIn.SYS_CLEAR_ENV, SYS_CLEAR_ENV);
+    b.add(BuiltIn.SYS_ENV, (Macro) Codes::sysEnv);
+    // Value of Sys.file comes from Session.file, but initial value must
+    // be a List because it has (progressive) record type.
+    b.add(BuiltIn.SYS_FILE, ImmutableList.of());
+    b.add(BuiltIn.SYS_PARSE_TREE, SYS_PARSE_TREE);
+    b.add(BuiltIn.SYS_PLAN, SYS_PLAN);
+    b.add(BuiltIn.SYS_PLAN_EX, SYS_PLAN_EX);
+    b.add(BuiltIn.SYS_SET, SYS_SET);
+    b.add(BuiltIn.SYS_SHOW, SYS_SHOW);
+    b.add(BuiltIn.SYS_SHOW_ALL, SYS_SHOW_ALL);
+    b.add(BuiltIn.SYS_UNSET, SYS_UNSET);
+    b.add(BuiltIn.TEST_BAG_SUM, TEST_BAG_SUM);
+    b.add(BuiltIn.TEST_FOO, TEST_FOO);
+    b.add(BuiltIn.TEST_LIST_SUM, TEST_LIST_SUM);
+    b.add(BuiltIn.TEST_OVER_COUNT, TEST_OVER_COUNT);
+    b.add(BuiltIn.TEST_OVER_SUM, TEST_OVER_SUM);
+    b.add(BuiltIn.TIME_ADD, TIME_ADD);
+    b.add(BuiltIn.TIME_COMPARE, TIME_COMPARE);
+    b.add(BuiltIn.TIME_FMT, TIME_FMT);
+    b.add(BuiltIn.TIME_FROM_MICROSECONDS, TIME_FROM_MICROSECONDS);
+    b.add(BuiltIn.TIME_FROM_MILLISECONDS, TIME_FROM_MILLISECONDS);
+    b.add(BuiltIn.TIME_FROM_NANOSECONDS, TIME_FROM_NANOSECONDS);
+    b.add(BuiltIn.TIME_FROM_REAL, TIME_FROM_REAL);
+    b.add(BuiltIn.TIME_FROM_SECONDS, TIME_FROM_SECONDS);
+    b.add(BuiltIn.TIME_FROM_STRING, TIME_FROM_STRING);
+    b.add(BuiltIn.TIME_GE, TIME_GE);
+    b.add(BuiltIn.TIME_GT, TIME_GT);
+    b.add(BuiltIn.TIME_LE, TIME_LE);
+    b.add(BuiltIn.TIME_LT, TIME_LT);
+    b.add(BuiltIn.TIME_NOW, TIME_NOW);
+    b.add(BuiltIn.TIME_SUBTRACT, TIME_SUBTRACT);
+    b.add(BuiltIn.TIME_TO_MICROSECONDS, TIME_TO_MICROSECONDS);
+    b.add(BuiltIn.TIME_TO_MILLISECONDS, TIME_TO_MILLISECONDS);
+    b.add(BuiltIn.TIME_TO_NANOSECONDS, TIME_TO_NANOSECONDS);
+    b.add(BuiltIn.TIME_TO_REAL, TIME_TO_REAL);
+    b.add(BuiltIn.TIME_TO_SECONDS, TIME_TO_SECONDS);
+    b.add(BuiltIn.TIME_TO_STRING, TIME_TO_STRING);
+    b.add(BuiltIn.TIME_ZERO_TIME, TIME_ZERO_TIME);
+    b.add(BuiltIn.VARIANT_PARSE, VARIANT_PARSE);
+    b.add(BuiltIn.VARIANT_PRINT, VARIANT_PRINT);
+    b.add(BuiltIn.VECTOR_ALL, VECTOR_ALL);
+    b.add(BuiltIn.VECTOR_APP, VECTOR_APP);
+    b.add(BuiltIn.VECTOR_APPI, VECTOR_APPI);
+    b.add(BuiltIn.VECTOR_COLLATE, VECTOR_COLLATE);
+    b.add(BuiltIn.VECTOR_CONCAT, VECTOR_CONCAT);
+    b.add(BuiltIn.VECTOR_EXISTS, VECTOR_EXISTS);
+    b.add(BuiltIn.VECTOR_FIND, VECTOR_FIND);
+    b.add(BuiltIn.VECTOR_FINDI, VECTOR_FINDI);
+    b.add(BuiltIn.VECTOR_FOLDL, VECTOR_FOLDL);
+    b.add(BuiltIn.VECTOR_FOLDLI, VECTOR_FOLDLI);
+    b.add(BuiltIn.VECTOR_FOLDR, VECTOR_FOLDR);
+    b.add(BuiltIn.VECTOR_FOLDRI, VECTOR_FOLDRI);
+    b.add(BuiltIn.VECTOR_FROM_LIST, VECTOR_FROM_LIST);
+    b.add(BuiltIn.VECTOR_LENGTH, VECTOR_LENGTH);
+    b.add(BuiltIn.VECTOR_MAP, VECTOR_MAP);
+    b.add(BuiltIn.VECTOR_MAPI, VECTOR_MAPI);
+    b.add(BuiltIn.VECTOR_MAX_LEN, VECTOR_MAX_LEN);
+    b.add(BuiltIn.VECTOR_SUB, VECTOR_SUB);
+    b.add(BuiltIn.VECTOR_TABULATE, VECTOR_TABULATE);
+    b.add(BuiltIn.VECTOR_UPDATE, VECTOR_UPDATE);
+    b.add(BuiltIn.WORD_ANDB, WORD_ANDB);
+    b.add(BuiltIn.WORD_COMPARE, WORD_COMPARE);
+    b.add(BuiltIn.WORD_DIV, WORD_DIV);
+    b.add(BuiltIn.WORD_FMT, WORD_FMT);
+    b.add(BuiltIn.WORD_FROM_INT, WORD_FROM_INT);
+    b.add(BuiltIn.WORD_FROM_LARGE, WORD_FROM_LARGE);
+    b.add(BuiltIn.WORD_FROM_LARGE_INT, WORD_FROM_LARGE_INT);
+    b.add(BuiltIn.WORD_FROM_LARGE_WORD, WORD_FROM_LARGE_WORD);
+    b.add(BuiltIn.WORD_FROM_STRING, WORD_FROM_STRING);
+    b.add(BuiltIn.WORD_MAX, WORD_MAX);
+    b.add(BuiltIn.WORD_MIN, WORD_MIN);
+    b.add(BuiltIn.WORD_MOD, WORD_MOD);
+    b.add(BuiltIn.WORD_NOTB, WORD_NOTB);
+    b.add(BuiltIn.WORD_OP_GE, WORD_OP_GE);
+    b.add(BuiltIn.WORD_OP_GT, WORD_OP_GT);
+    b.add(BuiltIn.WORD_OP_LE, WORD_OP_LE);
+    b.add(BuiltIn.WORD_OP_LT, WORD_OP_LT);
+    b.add(BuiltIn.WORD_OP_MINUS, WORD_OP_MINUS);
+    b.add(BuiltIn.WORD_OP_NEGATE, WORD_OP_NEGATE);
+    b.add(BuiltIn.WORD_OP_PLUS, WORD_OP_PLUS);
+    b.add(BuiltIn.WORD_OP_SHIFT_LEFT, WORD_OP_SHIFT_LEFT);
+    b.add(BuiltIn.WORD_OP_SHIFT_RIGHT, WORD_OP_SHIFT_RIGHT);
+    b.add(
+        BuiltIn.WORD_OP_SHIFT_RIGHT_ARITHMETIC, WORD_OP_SHIFT_RIGHT_ARITHMETIC);
+    b.add(BuiltIn.WORD_OP_TIMES, WORD_OP_TIMES);
+    b.add(BuiltIn.WORD_ORB, WORD_ORB);
+    b.add(BuiltIn.WORD_TO_INT, WORD_TO_INT);
+    b.add(BuiltIn.WORD_TO_INT_X, WORD_TO_INT_X);
+    b.add(BuiltIn.WORD_TO_LARGE, WORD_TO_LARGE);
+    b.add(BuiltIn.WORD_TO_LARGE_INT, WORD_TO_LARGE_INT);
+    b.add(BuiltIn.WORD_TO_LARGE_INT_X, WORD_TO_LARGE_INT_X);
+    b.add(BuiltIn.WORD_TO_LARGE_WORD, WORD_TO_LARGE_WORD);
+    b.add(BuiltIn.WORD_TO_LARGE_WORD_X, WORD_TO_LARGE_WORD_X);
+    b.add(BuiltIn.WORD_TO_LARGE_X, WORD_TO_LARGE_X);
+    b.add(BuiltIn.WORD_TO_STRING, WORD_TO_STRING);
+    b.add(BuiltIn.WORD_WORD_SIZE, WORD_WORD_SIZE);
+    b.add(BuiltIn.WORD_XORB, WORD_XORB);
+    b.add(BuiltIn.Z_ANDALSO, Unit.INSTANCE);
+    b.add(BuiltIn.Z_CURRENT, Unit.INSTANCE);
+    b.add(BuiltIn.Z_ELEMENTS, Unit.INSTANCE);
+    b.add(BuiltIn.Z_EXTENT, Z_EXTENT);
+    b.add(BuiltIn.Z_LIST, Z_LIST);
+    b.add(BuiltIn.Z_NTH, Unit.INSTANCE);
+    b.add(BuiltIn.Z_ORDINAL, 0);
+    b.add(BuiltIn.Z_ORELSE, Unit.INSTANCE);
+    b.add(BuiltIn.Z_SUM_INT, Z_SUM_INT);
+    b.add(BuiltIn.Z_SUM_REAL, Z_SUM_REAL);
+    b.add(BuiltIn.Z_TEST_OVER_COUNT_BAG, Z_TEST_OVER_COUNT_BAG);
+    b.add(BuiltIn.Z_TEST_OVER_COUNT_LIST, Z_TEST_OVER_COUNT_LIST);
+    b.add(BuiltIn.Z_TY_CON, Unit.INSTANCE);
+    b.add(BuiltIn.Z_VOID, Unit.INSTANCE);
+    BUILT_IN_VALUES = b.toImmutableMap();
+  }
 
   @SuppressWarnings("TrivialFunctionalExpressionUsage")
   public static final Map<Applicable, BuiltIn> BUILT_IN_MAP =
@@ -6216,18 +6964,24 @@ public abstract class Codes {
   /** Definitions of Morel built-in exceptions. */
   public enum BuiltInExn {
     // lint: sort until '##public ' where '##[A-Z]'
-    BIND("General", BuiltIn.Constructor.EXN_BIND, null),
+    BIND(
+        "General",
+        BuiltIn.Constructor.EXN_BIND,
+        "nonexhaustive binding failure"),
     CHR("General", BuiltIn.Constructor.EXN_CHR, null),
     DATE("Date", BuiltIn.Constructor.EXN_DATE, null),
-    DIV("General", BuiltIn.Constructor.EXN_DIV, null),
-    DOMAIN("General", BuiltIn.Constructor.EXN_DOMAIN, null),
+    DIV("General", BuiltIn.Constructor.EXN_DIV, "divide by zero"),
+    DOMAIN("General", BuiltIn.Constructor.EXN_DOMAIN, "domain error"),
     EMPTY("List", BuiltIn.Constructor.EXN_EMPTY, null),
     ERROR("Interact", BuiltIn.Constructor.EXN_ERROR, null), // not in basis
     FAIL("General", BuiltIn.Constructor.EXN_FAIL, null),
-    MATCH("General", BuiltIn.Constructor.EXN_MATCH, null),
+    MATCH(
+        "General",
+        BuiltIn.Constructor.EXN_MATCH,
+        "nonexhaustive match failure"),
     OPTION("Option", BuiltIn.Constructor.EXN_OPTION, null),
-    OVERFLOW("General", BuiltIn.Constructor.EXN_OVERFLOW, null),
-    SIZE("General", BuiltIn.Constructor.EXN_SIZE, null),
+    OVERFLOW("General", BuiltIn.Constructor.EXN_OVERFLOW, "overflow"),
+    SIZE("General", BuiltIn.Constructor.EXN_SIZE, "size"),
     SPAN("General", BuiltIn.Constructor.EXN_SPAN, null),
     SUBSCRIPT(
         "General",
@@ -7292,6 +8046,10 @@ public abstract class Codes {
       return isDigit(c) || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F';
     }
 
+    static boolean isOctDigit(char c) {
+      return '0' <= c && c <= '7';
+    }
+
     static boolean isPunct(char c) {
       return isGraph(c) && !isAlphaNum(c);
     }
@@ -7701,24 +8459,6 @@ public abstract class Codes {
     @Override // Applicable2
     public List apply(Object o1, Object o2) {
       return order(comparator.compare(o1, o2));
-    }
-  }
-
-  private static class Builder {
-    final PairList<BuiltIn, Object> builtIns = PairList.of();
-
-    ImmutableMap<BuiltIn, Object> build() {
-      return builtIns.toImmutableMap();
-    }
-
-    Builder put(BuiltIn builtin, Object o) {
-      builtIns.add(builtin, o);
-      return this;
-    }
-
-    Builder put2(BuiltIn builtin, Object o) {
-      builtIns.add(builtin, o);
-      return this;
     }
   }
 

@@ -27,14 +27,24 @@ Sys.set ("stringDepth", ~1);
 
 Relational;
 > val it =
->   {argMax=fn,argMin=fn,compare=fn,count=fn,empty=fn,iterate=fn,max=fn,maxBy=fn,
->    min=fn,minBy=fn,nonEmpty=fn,only=fn,sum=fn}
+>   {argMax=fn,argMin=fn,compare=fn,count=fn,empty=fn,iterate=fn,max=fn,
+>    maxBy=fn,min=fn,minBy=fn,nonEmpty=fn,only=fn,sum=fn}
 >   : {argMax:('a * 'b) bag -> 'a, argMin:('c * 'd) bag -> 'c,
->      compare:'e * 'e -> order, count:'f bag -> int, empty:'g bag -> bool,
->      iterate:'h bag -> ('h bag * 'h bag -> 'h bag) -> 'h bag, max:'i bag -> 'i,
->      maxBy:('j -> 'k) -> 'j list -> 'j, min:'l bag -> 'l,
->      minBy:('m -> 'n) -> 'm list -> 'm, nonEmpty:'o bag -> bool,
->      only:'p bag -> 'p, sum:'q bag -> 'q}
+>       compare:'e * 'e -> order, count:'f bag -> int, empty:'g bag -> bool,
+>       iterate:'h bag -> ('h bag * 'h bag -> 'h bag) -> 'h bag,
+>       max:'i bag -> 'i, maxBy:('j -> 'k) -> 'j list -> 'j, min:'l bag -> 'l,
+>       minBy:('m -> 'n) -> 'm list -> 'm, nonEmpty:'o bag -> bool,
+>       only:'p bag -> 'p, sum:'q bag -> 'q}
+
+(* Descending:
+     datatype descending = DESC of 'a
+*)
+DESC;
+> val it = fn : 'a -> 'a descending
+DESC "a";
+> val it = DESC "a" : string descending
+DESC (DESC "a");
+> val it = DESC (DESC "a") : string descending descending
 
 Relational.count (bag [1, 2, 3]);
 > val it = 3 : int
@@ -160,7 +170,7 @@ Sys.plan ();
 Relational.only [2];
 > val it = 2 : int
 Relational.only [1, 2, 3];
-> uncaught exception Size
+> uncaught exception Size [size]
 >   raised at: stdIn:1.1-1.26
 Relational.only [];
 > uncaught exception Empty
@@ -350,8 +360,8 @@ Relational.compare ({c=1, b=2.0}, {c=2, b=1.0});
 Relational.compare (SOME 1, NONE);
 > val it = GREATER : order
 Relational.compare (SOME 1, SOME "a");
-> 0.0-0.0 Error: Cannot deduce type: conflict: int vs string
->   raised at: 0.0-0.0
+> stdIn:1.1-1.38 Error: Cannot deduce type: conflict: int vs string
+>   raised at: stdIn:1.1-1.38
 Relational.compare (SOME ~1, NONE);
 > val it = GREATER : order
 Relational.compare (NONE, NONE);
@@ -375,6 +385,16 @@ Relational.compare ([], [1, 2]);
 > val it = LESS : order
 Relational.compare ([SOME 1, NONE], [SOME 1, SOME 2, SOME 3, NONE]);
 > val it = LESS : order
+(* 'word' compares as unsigned: a word with the high bit set is the largest
+   value, and 'order'/'order DESC' sort accordingly. *)
+Relational.compare (0wxffffffffffffffff, 0w1);
+> val it = GREATER : order
+Relational.compare (0w3, 0w7);
+> val it = LESS : order
+from x in [0wxffffffffffffffff, 0w7, 0w1] order x;
+> val it = [0wx1,0wx7,0wxFFFFFFFFFFFFFFFF] : word list
+from x in [0wxffffffffffffffff, 0w7, 0w1] order DESC x;
+> val it = [0wxFFFFFFFFFFFFFFFF,0wx7,0wx1] : word list
 
 (*) Use Relational.compare as comparator for List.collate and Vector.collate.
 List.collate Relational.compare ([1,2,3],[1,2,4]);

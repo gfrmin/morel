@@ -19,9 +19,12 @@
 package net.hydromatic.morel.ast;
 
 import com.google.common.collect.Lists;
+import com.google.common.primitives.UnsignedLong;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Locale;
 import net.hydromatic.morel.compile.BuiltIn;
+import net.hydromatic.morel.parse.Parsers;
 
 /** Context for writing an AST out as a string. */
 public class AstWriter {
@@ -60,22 +63,48 @@ public class AstWriter {
     return this;
   }
 
-  /** Appends an identifier to the output. */
+  /**
+   * Appends a name to the output verbatim (no quoting). Use for type names,
+   * type variables, and keywords that unparse themselves (e.g. {@code
+   * ordinal}); use {@link #idQuoted} for variable identifiers and record
+   * labels, which must be quoted if they are reserved words.
+   */
   public AstWriter id(String name) {
     b.append(name);
     return this;
   }
 
   /**
-   * Appends an ordinal-qualified-identifier to the output.
+   * Appends an ordinal-qualified identifier to the output, verbatim.
    *
-   * <p>Prints "v" for {@code id("v", 0)}, "v#1" for {@code id("v", 1)}, and so
+   * <p>Prints "v" for {@code id("v", 0)}, "v_1" for {@code id("v", 1)}, and so
    * forth.
    */
   public AstWriter id(String name, int i) {
     b.append(name);
     if (i > 0) {
       b.append('_').append(i);
+    }
+    return this;
+  }
+
+  /**
+   * Appends a variable identifier or record label, quoting it with back-ticks
+   * if it is a reserved word (or otherwise requires quoting), so that, for
+   * example, a variable named {@code left} round-trips.
+   */
+  public AstWriter idQuoted(String name) {
+    Parsers.appendId(b, name);
+    return this;
+  }
+
+  /** Appends an ordinal-qualified variable identifier, quoting if necessary. */
+  public AstWriter idQuoted(String name, int i) {
+    if (i == 0) {
+      Parsers.appendId(b, name);
+    } else {
+      // "name_i" is never a reserved word, so it does not need quoting.
+      b.append(name).append('_').append(i);
     }
     return this;
   }
@@ -231,6 +260,12 @@ public class AstWriter {
       append("\"")
           .append(((String) value).replace("\\", "\\\\").replace("\"", "\\\""))
           .append("\"");
+    } else if (value instanceof UnsignedLong) {
+      // A word, e.g. "0wxFF". Like Standard ML, print in hexadecimal.
+      append("0wx")
+          .append(
+              Long.toUnsignedString(((UnsignedLong) value).longValue(), 16)
+                  .toUpperCase(Locale.ROOT));
     } else if (value instanceof Character) {
       switch ((char) value) {
         case '"':
@@ -252,7 +287,11 @@ public class AstWriter {
       append(c.toString().replace("+", ""));
     } else if (value instanceof BuiltIn) {
       final BuiltIn builtIn = (BuiltIn) value;
-      if (builtIn.structure != null && !builtIn.structure.equals("$")) {
+      if (builtIn == BuiltIn.BOOL_NOT) {
+        // The "not" prefix operator prints unqualified, not as "#not Bool".
+        append("not");
+      } else if (!builtIn.structure.equals("Top")
+          && !builtIn.structure.equals("$")) {
         // E.g. "#find List" for the List.find function
         append("#")
             .append(builtIn.mlName)

@@ -35,7 +35,6 @@ import static org.apache.calcite.util.Util.first;
 import static org.apache.calcite.util.Util.intersects;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableRangeSet;
 import com.google.common.collect.Range;
 import java.math.BigDecimal;
@@ -81,18 +80,6 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 
 /** Converts AST expressions to Core expressions. */
 public class Resolver {
-  /** Map from {@link Op} to {@link BuiltIn}. */
-  public static final ImmutableMap<Op, BuiltIn> OP_BUILT_IN_MAP =
-      Init.INSTANCE.opBuiltInMap;
-
-  /**
-   * Map from {@link BuiltIn}, to {@link Op}; the reverse of {@link
-   * #OP_BUILT_IN_MAP}, and needed when we convert an optimized expression back
-   * to human-readable Morel code.
-   */
-  public static final ImmutableMap<BuiltIn, Op> BUILT_IN_OP_MAP =
-      Init.INSTANCE.builtInOpMap;
-
   final TypeMap typeMap;
   final NameGenerator nameGenerator;
   final Environment env;
@@ -523,6 +510,8 @@ public class Resolver {
         return core.stringLiteral((String) ((Ast.Literal) exp).value);
       case UNIT_LITERAL:
         return core.unitLiteral();
+      case WORD_LITERAL:
+        return core.wordLiteral((BigDecimal) ((Ast.Literal) exp).value);
       case ANNOTATED_EXP:
         return toCore(((Ast.AnnotatedExp) exp).exp);
       case ID:
@@ -684,6 +673,9 @@ public class Resolver {
     final Core.Exp coreFn;
     if (apply.fn.op == Op.RECORD_SELECTOR) {
       final Ast.RecordSelector recordSelector = (Ast.RecordSelector) apply.fn;
+      if (recordSelector.safe) {
+        return toCoreSafeNav(apply, recordSelector, coreArg, type);
+      }
       RecordLikeType recordType = (RecordLikeType) coreArg.type;
       if (coreArg.type.isProgressive()) {
         Object o = valueOf(env, coreArg);
@@ -712,11 +704,110 @@ public class Resolver {
   }
 
   /**
+   * Lowers safe navigation {@code e?.f} by tunneling through the receiver's
+   * functor layers (option, list): {@code F1.map (F2.map (... (Fn.map #f))) e}.
+   * The field's own type is preserved (no flattening).
+   */
+  private Core.Apply toCoreSafeNav(
+      Ast.Apply apply,
+      Ast.RecordSelector recordSelector,
+      Core.Exp coreArg,
+      Type type) {
+    final TypeSystem ts = typeMap.typeSystem;
+    // Peel the functor layers (outermost first) down to the record.
+    final List<BuiltIn> maps = new ArrayList<>();
+    Type t = coreArg.type;
+    while (true) {
+      if (t instanceof ListType) {
+        maps.add(BuiltIn.LIST_MAP);
+        t = t.elementType();
+      } else if (t.op() == Op.DATA_TYPE
+          && functorMap(((DataType) t).name()) != null) {
+        maps.add(functorMap(((DataType) t).name()));
+        t = ((DataType) t).arguments.get(0);
+      } else {
+        break;
+      }
+    }
+
+    final Core.RecordSelector selector =
+        core.recordSelector(ts, (RecordLikeType) t, recordSelector.name);
+    // Build "F1.map (F2.map (... (Fn.map #f)))", innermost layer first, then
+    // apply to the receiver.
+    Core.Exp fn = selector;
+    Type inType = t; // record type
+    Type outType = ((FnType) selector.type).resultType; // field type
+    for (int i = maps.size() - 1; i >= 0; i--) {
+      final BuiltIn mapBuiltIn = maps.get(i);
+      final Type fInType = wrapFunctor(ts, mapBuiltIn, inType);
+      final Type fOutType = wrapFunctor(ts, mapBuiltIn, outType);
+      fn =
+          core.apply(
+              apply.pos,
+              ts.fnType(fInType, fOutType),
+              core.functionLiteral(ts, mapBuiltIn),
+              fn);
+      inType = fInType;
+      outType = fOutType;
+    }
+    return core.apply(apply.pos, type, fn, coreArg);
+  }
+
+  /**
+   * Returns the {@code map} built-in for a safe-navigation functor (option,
+   * bag, vector) named {@code name}, or null if {@code name} is not such a
+   * functor. (List is handled separately, as it is a {@link ListType} rather
+   * than a {@link DataType}.)
+   */
+  private static @Nullable BuiltIn functorMap(String name) {
+    switch (name) {
+      case "option":
+        return BuiltIn.OPTION_MAP;
+      case "bag":
+        return BuiltIn.BAG_MAP;
+      case "vector":
+        return BuiltIn.VECTOR_MAP;
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Builds {@code F elementType}, where {@code F} is the functor of {@code
+   * mapBuiltIn} (LIST_MAP, OPTION_MAP, BAG_MAP or VECTOR_MAP).
+   */
+  private static Type wrapFunctor(
+      TypeSystem ts, BuiltIn mapBuiltIn, Type elementType) {
+    switch (mapBuiltIn) {
+      case LIST_MAP:
+        return ts.listType(elementType);
+      case BAG_MAP:
+        return ts.bagType(elementType);
+      case VECTOR_MAP:
+        return ts.vector(elementType);
+      default:
+        return ts.option(elementType);
+    }
+  }
+
+  /**
    * Converts a function (inside an {@link Ast.Apply} or {@link Ast.Aggregate})
    * to a core expression, dealing with overloads (if necessary) based on
    * argument type.
    */
   private Core.Exp fnToCore(Ast.Exp fn, Type argType) {
+    // The comparison operators '<', '<=', '>', '>=' are polymorphic, but word
+    // comparison must be unsigned, so route word operands to the Word structure
+    // members (which use Long.compareUnsigned).
+    if (fn.op == Op.ID
+        && argType instanceof TupleType
+        && !((TupleType) argType).argTypes.isEmpty()
+        && ((TupleType) argType).argType(0) == PrimitiveType.WORD) {
+      final BuiltIn op = BuiltIn.BY_ML_NAME.get(((Ast.Id) fn).name);
+      if (op != null && op.toWord() != op) {
+        return core.functionLiteral(typeMap.typeSystem, op.toWord());
+      }
+    }
     @Nullable
     Binding top = fn.op == Op.ID ? env.getTop(((Ast.Id) fn).name) : null;
     if (fn.op == Op.ID // TODO: change to 'top != null'
@@ -804,7 +895,13 @@ public class Resolver {
   private Core.Apply toCore(Ast.InfixCall call) {
     Core.Exp core0 = toCore(call.a0);
     Core.Exp core1 = toCore(call.a1);
-    final BuiltIn builtIn = toBuiltIn(call.op);
+    // The comparison operators '<', '<=', '>', '>=' are polymorphic, but word
+    // comparison must be unsigned, so route word operands to the Word structure
+    // members (which use Long.compareUnsigned).
+    BuiltIn builtIn = toBuiltIn(call.op);
+    if (core0.type == PrimitiveType.WORD) {
+      builtIn = builtIn.toWord();
+    }
     return core.apply(
         call.pos,
         typeMap.getType(call),
@@ -820,8 +917,70 @@ public class Resolver {
         typeMap.typeSystem, core.not(typeMap.typeSystem, core0), core1);
   }
 
+  /** Returns the built-in function that an infix operator resolves to. */
   private BuiltIn toBuiltIn(Op op) {
-    return OP_BUILT_IN_MAP.get(op);
+    switch (op) {
+      case AT:
+        return BuiltIn.LIST_AT;
+      case CONS:
+        return BuiltIn.OP_CONS;
+      case EQ:
+        return BuiltIn.OP_EQ;
+      case GE:
+        return BuiltIn.OP_GE;
+      case GT:
+        return BuiltIn.OP_GT;
+      case LE:
+        return BuiltIn.OP_LE;
+      case LT:
+        return BuiltIn.OP_LT;
+      case NE:
+        return BuiltIn.OP_NE;
+      case ANDALSO:
+        return BuiltIn.Z_ANDALSO;
+      case ORELSE:
+        return BuiltIn.Z_ORELSE;
+      case PLUS:
+        return BuiltIn.REAL_OP_PLUS;
+      default:
+        throw new AssertionError(op);
+    }
+  }
+
+  /**
+   * Returns the infix operator that a built-in function renders as, or null if
+   * it has no infix form. The reverse of {@link #toBuiltIn}; used to convert an
+   * optimized expression back to human-readable Morel code (see {@link
+   * Core.Apply#unparse}).
+   */
+  public static @Nullable Op toOp(BuiltIn builtIn) {
+    switch (builtIn) {
+      case LIST_AT:
+        return Op.AT;
+      case OP_CONS:
+        return Op.CONS;
+      case OP_EQ:
+        return Op.EQ;
+      case OP_GE:
+        return Op.GE;
+      case OP_GT:
+        return Op.GT;
+      case OP_LE:
+        return Op.LE;
+      case OP_LT:
+        return Op.LT;
+      case OP_NE:
+        return Op.NE;
+      case Z_ANDALSO:
+        return Op.ANDALSO;
+      case Z_ORELSE:
+        return Op.ORELSE;
+      case INT_OP_PLUS:
+      case REAL_OP_PLUS:
+        return Op.PLUS;
+      default:
+        return null;
+    }
   }
 
   private Core.Fn toCore(Ast.Fn fn) {
@@ -938,6 +1097,7 @@ public class Resolver {
       case INT_LITERAL_PAT:
       case REAL_LITERAL_PAT:
       case STRING_LITERAL_PAT:
+      case WORD_LITERAL_PAT:
         return core.literalPat(pat.op, type, ((Ast.LiteralPat) pat).value);
 
       case WILDCARD_PAT:
@@ -1078,40 +1238,6 @@ public class Resolver {
   }
 
   /** Helper for initialization. */
-  private enum Init {
-    INSTANCE;
-
-    final ImmutableMap<Op, BuiltIn> opBuiltInMap;
-    final ImmutableMap<BuiltIn, Op> builtInOpMap;
-
-    Init() {
-      Object[] values = {
-        BuiltIn.LIST_AT, Op.AT,
-        BuiltIn.OP_CONS, Op.CONS,
-        BuiltIn.OP_EQ, Op.EQ,
-        BuiltIn.OP_GE, Op.GE,
-        BuiltIn.OP_GT, Op.GT,
-        BuiltIn.OP_LE, Op.LE,
-        BuiltIn.OP_LT, Op.LT,
-        BuiltIn.OP_NE, Op.NE,
-        BuiltIn.Z_ANDALSO, Op.ANDALSO,
-        BuiltIn.Z_ORELSE, Op.ORELSE,
-        BuiltIn.Z_PLUS_INT, Op.PLUS,
-        BuiltIn.Z_PLUS_REAL, Op.PLUS,
-      };
-      final ImmutableMap.Builder<BuiltIn, Op> b2o = ImmutableMap.builder();
-      final Map<Op, BuiltIn> o2b = new HashMap<>();
-      for (int i = 0; i < values.length / 2; i++) {
-        BuiltIn builtIn = (BuiltIn) values[i * 2];
-        Op op = (Op) values[i * 2 + 1];
-        b2o.put(builtIn, op);
-        o2b.put(op, builtIn);
-      }
-      builtInOpMap = b2o.build();
-      opBuiltInMap = ImmutableMap.copyOf(o2b);
-    }
-  }
-
   /**
    * Resolved declaration. It can be converted to an expression given a result
    * expression; depending on sub-type, that expression will either be a {@code
@@ -1344,7 +1470,7 @@ public class Resolver {
           scan.condition == null
               ? core.boolLiteral(true)
               : r.withEnv(bindings2).toCore(scan.condition);
-      fromBuilder.scan(corePat, coreExp, coreCondition);
+      fromBuilder.scan(scan.op, corePat, coreExp, coreCondition);
       if (scan.exp == null) {
         // This is an extent scan. Extents are unordered, which makes the query
         // unordered.

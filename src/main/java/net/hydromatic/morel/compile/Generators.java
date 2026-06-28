@@ -74,12 +74,30 @@ class Generators {
     boolean hasBounds = false;
     Core.Exp prefixMatch = null;
     Core.Exp prefixString = null;
+    Core.Exp rangeContainsMatch = null;
+    Core.Exp rangeContainsValue = null;
+    Core.Exp rangeContainsRange = null;
 
     for (Core.Exp c : context.constraints) {
       if (elemMatch == null
           && c.isCallTo(BuiltIn.OP_ELEM)
           && containsRef(c.arg(0), pat)) {
         elemMatch = c;
+      }
+      // 'pat elem [a..b]' is rewritten to 'Range.contains (a..b) pat'. If the
+      // range is finite and 'pat' is discrete, it is a finite generator for
+      // 'pat', equivalent to 'pat in Range.flatten [a..b]'.
+      if (rangeContainsMatch == null
+          && c.op == Op.APPLY
+          && ((Core.Apply) c).fn.isCallTo(BuiltIn.RANGE_CONTAINS)
+          && references(((Core.Apply) c).arg, pat)
+          && pat.type.isDiscrete(cache.typeSystem)) {
+        final Core.Exp range = ((Core.Apply) ((Core.Apply) c).fn).arg;
+        if (isFiniteRange(range)) {
+          rangeContainsMatch = c;
+          rangeContainsValue = ((Core.Apply) c).arg;
+          rangeContainsRange = range;
+        }
       }
       if (pointMatch == null && c.isCallTo(BuiltIn.OP_EQ)) {
         if (references(c.arg(0), pat)) {
@@ -114,6 +132,31 @@ class Generators {
       final Core.Pat elemPat = cache.patForExp(elemMatch.arg(0));
       CollectionGenerator.create(
           cache, ordered, elemPat, collection, ImmutableSet.of(elemMatch));
+      cache.deriveFieldGenerators(ordered);
+      return true;
+    }
+    if (rangeContainsMatch != null) {
+      final TypeSystem typeSystem = cache.typeSystem;
+      final Type elementType = pat.type;
+      final Core.Exp rangeListExp =
+          core.list(
+              typeSystem,
+              typeSystem.range(elementType),
+              ImmutableList.of(rangeContainsRange));
+      final Core.Exp collection =
+          core.call(
+              typeSystem,
+              BuiltIn.RANGE_FLATTEN,
+              elementType,
+              Pos.ZERO,
+              rangeListExp);
+      final Core.Pat elemPat = cache.patForExp(rangeContainsValue);
+      CollectionGenerator.create(
+          cache,
+          ordered,
+          elemPat,
+          collection,
+          ImmutableSet.of(rangeContainsMatch));
       cache.deriveFieldGenerators(ordered);
       return true;
     }
@@ -2105,7 +2148,8 @@ class Generators {
 
   /** Returns whether exp is "param - 1". */
   private static boolean isDecrementOf(Core.Exp exp, Core.NamedPat param) {
-    if (!exp.isCallTo(BuiltIn.OP_MINUS) && !exp.isCallTo(BuiltIn.Z_MINUS_INT)) {
+    if (!exp.isCallTo(BuiltIn.OP_MINUS)
+        && !exp.isCallTo(BuiltIn.INT_OP_MINUS)) {
       return false;
     }
     final Core.Apply minus = (Core.Apply) exp;
@@ -2542,7 +2586,7 @@ class Generators {
               final Core.Exp eq =
                   core.equal(cache.typeSystem, caseExp.exp, excludeValue);
               final Core.Exp notEq =
-                  core.call(cache.typeSystem, BuiltIn.NOT, eq);
+                  core.call(cache.typeSystem, BuiltIn.BOOL_NOT, eq);
               substituted = core.andAlso(cache.typeSystem, substituted, notEq);
             }
             branches.add(substituted);
@@ -2573,7 +2617,8 @@ class Generators {
         for (Core.Exp excludeValue : excludeValues) {
           final Core.Exp eq =
               core.equal(cache.typeSystem, caseExp.exp, excludeValue);
-          final Core.Exp notEq = core.call(cache.typeSystem, BuiltIn.NOT, eq);
+          final Core.Exp notEq =
+              core.call(cache.typeSystem, BuiltIn.BOOL_NOT, eq);
           branchExp = core.andAlso(cache.typeSystem, branchExp, notEq);
         }
 
@@ -2665,6 +2710,7 @@ class Generators {
       case INT_LITERAL_PAT:
       case REAL_LITERAL_PAT:
       case STRING_LITERAL_PAT:
+      case WORD_LITERAL_PAT:
         // Literal pattern: (subject = literal) andalso body
         final Core.Exp literal = patternToLiteral(pat);
         if (literal == null) {
@@ -2863,6 +2909,64 @@ class Generators {
     }
   }
 
+  /**
+   * If {@code constraint} is {@code Range.contains range pat}, returns the
+   * range constructor application (e.g. {@code AT_LEAST a} or {@code CLOSED (a,
+   * b)}); otherwise returns null.
+   */
+  private static Core.@Nullable Apply rangeContainsArg(
+      Core.Exp constraint, Core.Pat pat) {
+    if (constraint.op != Op.APPLY) {
+      return null;
+    }
+    final Core.Apply apply = (Core.Apply) constraint;
+    if (!apply.fn.isCallTo(BuiltIn.RANGE_CONTAINS)
+        || !references(apply.arg, pat)) {
+      return null;
+    }
+    final Core.Exp range = ((Core.Apply) apply.fn).arg;
+    return range instanceof Core.Apply
+            && ((Core.Apply) range).fn instanceof Core.Id
+        ? (Core.Apply) range
+        : null;
+  }
+
+  /** Returns the range constructor of a range application, or null. */
+  private static BuiltIn.@Nullable Constructor rangeConstructor(
+      Core.Apply range) {
+    return BuiltIn.Constructor.forName(((Core.Id) range.fn).idPat.name);
+  }
+
+  /**
+   * Returns whether {@code range} is a range constructor application bounded on
+   * both ends (e.g. {@code CLOSED (a, b)}), and therefore finite (and
+   * enumerable, for a discrete element type). Infinite constructors such as
+   * {@code AT_LEAST a} and {@code ALL} return false.
+   */
+  private static boolean isFiniteRange(Core.Exp range) {
+    if (!(range instanceof Core.Apply)) {
+      return false;
+    }
+    final Core.Apply ctor = (Core.Apply) range;
+    if (!(ctor.fn instanceof Core.Id)) {
+      return false;
+    }
+    final BuiltIn.Constructor c =
+        BuiltIn.Constructor.forName(((Core.Id) ctor.fn).idPat.name);
+    if (c == null) {
+      return false;
+    }
+    switch (c) {
+      case RANGE_CLOSED:
+      case RANGE_CLOSED_OPEN:
+      case RANGE_OPEN:
+      case RANGE_OPEN_CLOSED:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   /** Returns whether a constraint is a comparison bound on {@code pat}. */
   private static boolean isBoundConstraint(Core.Exp constraint, Core.Pat pat) {
     switch (constraint.builtIn()) {
@@ -2883,6 +2987,17 @@ class Generators {
         return references(constraint.arg(0), pat)
             || references(constraint.arg(1), pat);
       default:
+        // 'Range.contains (AT_LEAST a) pat' (and the other one-sided ranges)
+        // is a comparison bound; a two-sided range is handled as a generator,
+        // not a bound.
+        final Core.Apply range = rangeContainsArg(constraint, pat);
+        if (range != null) {
+          final BuiltIn.Constructor c = rangeConstructor(range);
+          return c == BuiltIn.Constructor.RANGE_AT_LEAST
+              || c == BuiltIn.Constructor.RANGE_AT_MOST
+              || c == BuiltIn.Constructor.RANGE_GREATER_THAN
+              || c == BuiltIn.Constructor.RANGE_LESS_THAN;
+        }
         return false;
     }
   }
@@ -3280,6 +3395,24 @@ class Generators {
                 bound, constraint.builtIn() == BuiltIn.CHAR_OP_LT, constraint);
           }
           break;
+        default:
+          // 'Range.contains (AT_LEAST a) pat' -> "pat >= a";
+          // 'Range.contains (GREATER_THAN a) pat' -> "pat > a".
+          final Core.Apply range = rangeContainsArg(constraint, pat);
+          if (range != null) {
+            final BuiltIn.Constructor c = rangeConstructor(range);
+            if (c == BuiltIn.Constructor.RANGE_AT_LEAST
+                || c == BuiltIn.Constructor.RANGE_GREATER_THAN) {
+              final Core.Exp bound = range.arg;
+              if (requireConstant && !bound.isConstant()) {
+                continue;
+              }
+              return new Bound(
+                  bound,
+                  c == BuiltIn.Constructor.RANGE_GREATER_THAN,
+                  constraint);
+            }
+          }
       }
     }
     return null;
@@ -3371,6 +3504,22 @@ class Generators {
                 bound, constraint.builtIn() == BuiltIn.CHAR_OP_GT, constraint);
           }
           break;
+        default:
+          // 'Range.contains (AT_MOST b) pat' -> "pat <= b";
+          // 'Range.contains (LESS_THAN b) pat' -> "pat < b".
+          final Core.Apply range = rangeContainsArg(constraint, pat);
+          if (range != null) {
+            final BuiltIn.Constructor c = rangeConstructor(range);
+            if (c == BuiltIn.Constructor.RANGE_AT_MOST
+                || c == BuiltIn.Constructor.RANGE_LESS_THAN) {
+              final Core.Exp bound = range.arg;
+              if (requireConstant && !bound.isConstant()) {
+                continue;
+              }
+              return new Bound(
+                  bound, c == BuiltIn.Constructor.RANGE_LESS_THAN, constraint);
+            }
+          }
       }
     }
     return null;
@@ -3407,7 +3556,7 @@ class Generators {
     if (exp instanceof Core.Apply) {
       final Core.Apply apply = (Core.Apply) exp;
       switch (apply.builtIn()) {
-        case Z_PLUS_INT:
+        case INT_OP_PLUS:
         case OP_PLUS:
           // pat + k
           if (references(apply.arg(0), pat) && apply.arg(1).isConstant()) {
@@ -3424,7 +3573,7 @@ class Generators {
             }
           }
           break;
-        case Z_MINUS_INT:
+        case INT_OP_MINUS:
         case OP_MINUS:
           // pat - k
           if (references(apply.arg(0), pat) && apply.arg(1).isConstant()) {
@@ -3450,7 +3599,7 @@ class Generators {
       return exp;
     }
     return core.call(
-        typeSystem, BuiltIn.Z_MINUS_INT, exp, core.intLiteral(offset));
+        typeSystem, BuiltIn.INT_OP_MINUS, exp, core.intLiteral(offset));
   }
 
   /**
@@ -3693,7 +3842,8 @@ class Generators {
       // Build: String.size s + 1
       final Core.Exp sizeExp = core.call(ts, BuiltIn.STRING_SIZE, strExp);
       final Core.Literal one = core.intLiteral(BigDecimal.ONE);
-      final Core.Exp countExp = core.call(ts, BuiltIn.Z_PLUS_INT, sizeExp, one);
+      final Core.Exp countExp =
+          core.call(ts, BuiltIn.INT_OP_PLUS, sizeExp, one);
 
       // Build: fn i => String.substring(s, 0, i)
       final Core.IdPat iPat = core.idPat(PrimitiveType.INT, "i", 0);

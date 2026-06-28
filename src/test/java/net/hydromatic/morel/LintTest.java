@@ -55,6 +55,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import net.hydromatic.morel.compile.BuiltIn;
 import net.hydromatic.morel.eval.Codes;
+import net.hydromatic.morel.parse.MorelParserImplConstants;
+import net.hydromatic.morel.parse.Parsers;
 import net.hydromatic.morel.util.Generation;
 import net.hydromatic.morel.util.JavaVersion;
 import net.hydromatic.morel.util.PairList;
@@ -629,6 +631,58 @@ public class LintTest {
                     line,
                     "decorative comment; use '---' not '%s'",
                     line.line().contains("***") ? "***" : "==="));
+
+    // Rule: consecutive "(*)" line comments should be a single block comment.
+    b.add(
+        line -> line.state().language == Language.MOREL,
+        LintTest::checkConsecutiveComments);
+  }
+
+  /**
+   * Tracks runs of consecutive {@code (*)} line comments, and flags each run of
+   * two or more as one that should be a block comment. An end-of-line comment
+   * (one preceded by non-whitespace) does not count, and a run that mentions
+   * {@code TODO} is left alone so that individual lines can be deleted without
+   * reformatting.
+   */
+  private static void checkConsecutiveComments(
+      Puffin.Line<GlobalState, FileState> line) {
+    final FileState f = line.state();
+    // Use trim() (not stripLeading(), which requires JDK 11) to find a line
+    // comment; trailing whitespace does not affect the startsWith check.
+    if (line.line().trim().startsWith("(*)")) {
+      if (f.commentRunStart == 0) {
+        f.commentRunStart = line.fnr();
+        f.commentRunTodo = false;
+      }
+      f.commentRunEnd = line.fnr();
+      if (line.line().contains("TODO")) {
+        f.commentRunTodo = true;
+      }
+    } else {
+      flushCommentRun(line);
+    }
+    if (line.isLast()) {
+      flushCommentRun(line);
+    }
+  }
+
+  /** Emits a message if the current comment run has two or more lines. */
+  private static void flushCommentRun(
+      Puffin.Line<GlobalState, FileState> line) {
+    final FileState f = line.state();
+    if (f.commentRunStart != 0) {
+      if (f.commentRunEnd > f.commentRunStart && !f.commentRunTodo) {
+        f.message(
+            line,
+            f.commentRunStart,
+            "Consecutive line comments. To fix, convert lines %d through %d "
+                + "into a block comment.",
+            f.commentRunStart,
+            f.commentRunEnd);
+      }
+      f.commentRunStart = 0;
+    }
   }
 
   private static void addProgram4(Puffin.Builder<GlobalState, FileState> b) {
@@ -1125,6 +1179,42 @@ public class LintTest {
     assertThat(programResult("foo.smli", code), is(expectedMessages));
   }
 
+  /** Tests the rule that flags consecutive {@code (*)} line comments. */
+  @Test
+  void testConsecutiveComments() {
+    final String code =
+        "(*) first\n"
+            + "(*) second\n"
+            + "(*) third\n"
+            + "val x = 1;\n"
+            + "\n"
+            + "(*) a lone line comment is fine\n"
+            + "val y = 2;\n"
+            + "\n"
+            + "val z = 3; (*) an end-of-line comment is fine\n"
+            + "\n"
+            + "(*) TODO a run that mentions TODO is left alone\n"
+            + "(*) so that a line can be deleted without reformatting\n"
+            + "\n"
+            + "(*) End foo.smli\n";
+    // programResult replaces ", " with a newline, so the message text is
+    // split after "To fix,".
+    final String result = programResult("foo.smli", code);
+    // A run of three consecutive line comments is flagged at its first line.
+    assertThat(
+        result,
+        containsString(
+            "GuavaCharSource{memory}:1:Consecutive line comments. To fix"));
+    assertThat(
+        result,
+        containsString("convert lines 1 through 3 into a block comment."));
+    // The lone comment, the end-of-line comment, and the TODO run are not
+    // flagged.
+    assertThat(result, not(containsString("convert lines 6")));
+    assertThat(result, not(containsString("convert lines 9")));
+    assertThat(result, not(containsString("convert lines 11")));
+  }
+
   @Test
   void testProgramWorksMarkdown() {
     final String code =
@@ -1161,6 +1251,28 @@ public class LintTest {
       System.out.println(message);
     }
     assertThat("Lint violations:\n" + b, g.messages, empty());
+  }
+
+  /**
+   * Tests that {@link Parsers#RESERVED_WORDS} matches the alphabetic keyword
+   * tokens generated from {@code MorelParser.jj}. If this fails, a keyword was
+   * added or removed; update {@code RESERVED_WORDS} to match.
+   */
+  @Test
+  void testReservedWords() {
+    final TreeSet<String> fromGrammar = new TreeSet<>();
+    for (String image : MorelParserImplConstants.tokenImage) {
+      // A keyword token's image is the quoted literal, e.g. "\"left\"".
+      if (image.length() >= 3
+          && image.charAt(0) == '"'
+          && image.charAt(image.length() - 1) == '"') {
+        final String word = image.substring(1, image.length() - 1);
+        if (word.matches("[a-z]+")) {
+          fromGrammar.add(word);
+        }
+      }
+    }
+    assertThat(new TreeSet<>(Parsers.RESERVED_WORDS), is(fromGrammar));
   }
 
   /** Tests the primary-constructor rule against synthetic source code. */
@@ -1385,7 +1497,7 @@ public class LintTest {
     final Set<String> missing = new TreeSet<>();
     for (BuiltIn builtIn : BuiltIn.values()) {
       final String structure = builtIn.structure;
-      if (structure == null
+      if (structure.equals("Top")
           || structure.equals("$")
           || structure.equals("Test")) {
         continue;
@@ -1422,7 +1534,7 @@ public class LintTest {
     final List<String> errors = new ArrayList<>();
     for (BuiltIn builtIn : BuiltIn.values()) {
       final String structure = builtIn.structure;
-      if (structure == null
+      if (structure.equals("Top")
           || structure.equals("$")
           || structure.equals("Test")) {
         continue;
@@ -1522,6 +1634,31 @@ public class LintTest {
   }
 
   /**
+   * Checks that every built-in structure has a corresponding {@code
+   * src/test/resources/script/built-in/{name}.smli} test script.
+   */
+  @Test
+  void testStructureScripts() {
+    final File baseDir = TestUtils.getBaseDir(TestUtils.class);
+    final File scriptDir =
+        new File(baseDir, "src/test/resources/script/built-in");
+    final List<String> missing = new ArrayList<>();
+    for (String structureName : MODEL.structureNames()) {
+      final String fileName = Generation.toKebab(structureName) + ".smli";
+      if (!new File(scriptDir, fileName).exists()) {
+        missing.add(fileName);
+      }
+    }
+    if (!missing.isEmpty()) {
+      fail(
+          format(
+              "Missing built-in test scripts: %s\n" //
+                  + "Create a file for each in %s",
+              missing, scriptDir.getAbsolutePath()));
+    }
+  }
+
+  /**
    * Validates that signature files in the lib directory are well-formed and
    * that their value and exception declarations match the corresponding entries
    * in the {@link net.hydromatic.morel.compile.BuiltIn} and {@link
@@ -1585,6 +1722,16 @@ public class LintTest {
     int commentDepth;
     int commentStartLine;
     int pendingBlockOpenLine;
+    /**
+     * First line (1-based) of a run of consecutive {@code (*)} line comments,
+     * or 0 if not in such a run.
+     */
+    int commentRunStart;
+    /** Last line (1-based) of the current {@code (*)} comment run. */
+    int commentRunEnd;
+    /** Whether any line of the current comment run contains {@code TODO}. */
+    boolean commentRunTodo;
+
     boolean inCodeBlock;
     boolean inPreBlock;
     boolean inComment;

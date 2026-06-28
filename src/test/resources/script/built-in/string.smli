@@ -28,25 +28,28 @@ Sys.set ("stringDepth", ~1);
 
 String;
 > val it =
->   {<=fn,<==fn,>=fn,>==fn,^=fn,collate=fn,compare=fn,concat=fn,concatWith=fn,
->    explode=fn,extract=fn,fields=fn,implode=fn,isPrefix=fn,isSubstring=fn,
->    isSuffix=fn,map=fn,maxSize=2147483647,size=fn,str=fn,sub=fn,substring=fn,
->    tokens=fn,translate=fn}
+>   {<=fn,<==fn,<>=fn,==fn,>=fn,>==fn,^=fn,collate=fn,compare=fn,concat=fn,
+>    concatWith=fn,explode=fn,extract=fn,fields=fn,implode=fn,isPrefix=fn,
+>    isSubstring=fn,isSuffix=fn,map=fn,maxSize=2147483647,size=fn,str=fn,
+>    sub=fn,substring=fn,tokens=fn,translate=fn}
 >   : {<:string * string -> bool, <=:string * string -> bool,
->      >:string * string -> bool, >=:string * string -> bool,
->      ^:string * string -> string,
->      collate:(char * char -> order) -> string * string -> order,
->      compare:string * string -> order, concat:string list -> string,
->      concatWith:string -> string list -> string, explode:string -> char list,
->      extract:string * int * int option -> string,
->      fields:(char -> bool) -> string -> string list,
->      implode:char list -> string, isPrefix:string -> string -> bool,
->      isSubstring:string -> string -> bool, isSuffix:string -> string -> bool,
->      map:(char -> char) -> string -> string, maxSize:int, size:string -> int,
->      str:char -> string, sub:string * int -> char,
->      substring:string * int * int -> string,
->      tokens:(char -> bool) -> string -> string list,
->      translate:(char -> string) -> string -> string}
+>       <>:string * string -> bool, =:string * string -> bool,
+>       >:string * string -> bool, >=:string * string -> bool,
+>       ^:string * string -> string,
+>       collate:(char * char -> order) -> string * string -> order,
+>       compare:string * string -> order, concat:string list -> string,
+>       concatWith:string -> string list -> string,
+>       explode:string -> char list,
+>       extract:string * int * int option -> string,
+>       fields:(char -> bool) -> string -> string list,
+>       implode:char list -> string, isPrefix:string -> string -> bool,
+>       isSubstring:string -> string -> bool,
+>       isSuffix:string -> string -> bool,
+>       map:(char -> char) -> string -> string, maxSize:int,
+>       size:string -> int, str:char -> string, sub:string * int -> char,
+>       substring:string * int * int -> string,
+>       tokens:(char -> bool) -> string -> string list,
+>       translate:(char -> string) -> string -> string}
 
 (*) val maxSize : int
 String.maxSize;
@@ -161,7 +164,7 @@ String.`^`;
 > val it = "abcdef" : string
 Sys.plan ();
 > val it =
->   "apply2(fnValue ^, apply2(fnValue ^, apply2(fnValue ^, constant(a), constant(bc)), constant()), constant(def))"
+>   "apply2(fnValue String.^, apply2(fnValue String.^, apply2(fnValue String.^, constant(a), constant(bc)), constant()), constant(def))"
 >   : string
 
 (*) val concat : string list -> string
@@ -365,6 +368,10 @@ String.`<`;
 > val it = false : bool
 "ab" < "ab";
 > val it = false : bool
+String.`<` ("a", "A");
+> val it = false : bool
+String.`<` ("a", "b");
+> val it = true : bool
 
 (*) val <= : string * string -> bool
 String.`<=`;
@@ -390,11 +397,23 @@ String.`>=`;
 "ab" >= "ab";
 > val it = true : bool
 
-(*) val toString : string -> String.string
-(*) val scan       : (char, 'a) StringCvt.reader
-(*)                    -> (string, 'a) StringCvt.reader
-(*) val fromString : String.string -> string option
-(*) val toCString : string -> String.string
-(*) val fromCString : String.string -> string option
+(*) val =  : string * string -> bool
+String.`=` ("a", "a");
+> val it = true : bool
+String.`=` ("a", "b");
+> val it = false : bool
+
+(*) val <> : string * string -> bool
+String.`<>` ("a", "b");
+> val it = true : bool
+String.`<>` ("a", "a");
+> val it = false : bool
+
+(* val toString : string -> String.string
+ * val scan       : (char, 'a) StringCvt.reader
+ *                    -> (string, 'a) StringCvt.reader
+ * val fromString : String.string -> string option
+ * val toCString : string -> String.string
+ * val fromCString : String.string -> string option *)
 
 (*) End string.smli

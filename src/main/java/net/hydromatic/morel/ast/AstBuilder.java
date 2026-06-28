@@ -167,13 +167,13 @@ public enum AstBuilder {
     return new Ast.Literal(pos, Op.INT_LITERAL, value);
   }
 
-  /** Creates a {@code float} literal. */
+  /** Creates a {@code real} literal. */
   public Ast.Literal realLiteral(Pos pos, BigDecimal value) {
     return new Ast.Literal(pos, Op.REAL_LITERAL, value);
   }
 
   /**
-   * Creates a {@code float} literal for a special IEEE floating point value:
+   * Creates a {@code real} literal for a special IEEE floating point value:
    * NaN, negative zero, positive and negative infinity.
    */
   public Ast.Literal realLiteral(Pos pos, Float value) {
@@ -188,6 +188,11 @@ public enum AstBuilder {
   /** Creates a unit literal. */
   public Ast.Literal unitLiteral(Pos p) {
     return new Ast.Literal(p, Op.UNIT_LITERAL, Unit.INSTANCE);
+  }
+
+  /** Creates a {@code word} literal. */
+  public Ast.Literal wordLiteral(Pos pos, BigDecimal value) {
+    return new Ast.Literal(pos, Op.WORD_LITERAL, value);
   }
 
   public Ast.Current current(Pos pos) {
@@ -236,7 +241,11 @@ public enum AstBuilder {
   }
 
   public Ast.RecordSelector recordSelector(Pos pos, String name) {
-    return new Ast.RecordSelector(pos, name);
+    return new Ast.RecordSelector(pos, name, false);
+  }
+
+  public Ast.RecordSelector recordSelector(Pos pos, String name, boolean safe) {
+    return new Ast.RecordSelector(pos, name, safe);
   }
 
   public Ast.Type namedType(
@@ -679,7 +688,7 @@ public enum AstBuilder {
    * reference (e.g. "#hd List").
    */
   public Ast.Exp ref(Pos pos, BuiltIn builtIn) {
-    if (builtIn.structure == null) {
+    if (builtIn.structure.equals("Top")) {
       return id(pos, builtIn.mlName);
     } else {
       return apply(
@@ -693,7 +702,16 @@ public enum AstBuilder {
 
   public Ast.Scan scan(
       Pos pos, Ast.Pat pat, Ast.Exp exp, Ast.@Nullable Exp condition) {
-    return new Ast.Scan(pos, pat, exp, condition);
+    return new Ast.Scan(pos, Op.SCAN, pat, exp, condition);
+  }
+
+  public Ast.Scan scan(
+      Pos pos,
+      Op op,
+      Ast.Pat pat,
+      Ast.@Nullable Exp exp,
+      Ast.@Nullable Exp condition) {
+    return new Ast.Scan(pos, op, pat, exp, condition);
   }
 
   public Ast.Order order(Pos pos, Ast.Exp exp) {

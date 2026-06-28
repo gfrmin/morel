@@ -215,8 +215,8 @@ end;
 > val it : int
 :t
 1 + "a";
-> 0.0-0.0 Error: Cannot deduce type: conflict: int vs string
->   raised at: 0.0-0.0
+> stdIn:1.1-1.8 Error: Cannot deduce type: conflict: int vs string
+>   raised at: stdIn:1.1-1.8
 :t NONE;
 > val it : 'a option
 :t SOME 4;
@@ -298,8 +298,8 @@ end;
 > stdIn:1.29 Error: unresolved flex record (can't tell what fields there are besides #job)
 >   raised at: stdIn:1.29
 
-(*) A bare record selector cannot determine the record type either, and
-(*) the error position is the selector itself.
+(* A bare record selector cannot determine the record type either, and
+ * the error position is the selector itself. *)
 #a;
 > stdIn:1.1-1.3 Error: unresolved flex record (can't tell what fields there are besides #a)
 >   raised at: stdIn:1.1-1.3
@@ -344,8 +344,8 @@ end;
 
 (*) Cannot be typed, since the parameter f is in a monomorphic position
 :t fn f => (f true, f 0);
-> 0.0-0.0 Error: Cannot deduce type: conflict: int vs bool
->   raised at: 0.0-0.0
+> stdIn:1.14-1.35 Error: Cannot deduce type: conflict: int vs bool
+>   raised at: stdIn:1.14-1.35
 
 (*) Recursive function types
 :t
@@ -503,6 +503,27 @@ from d in [{a=1,b=true}], i in [2] yield {d} yield a;
 > val it : int list
 :t from a in bag [1], _ = ();
 > val it : int bag
+
+(* Outer joins. A 'left'/'full' join wraps the newly scanned fields in
+ * 'option'; a 'right'/'full' join wraps the fields of earlier steps. *)
+:t from i in [1, 2] left join j in [i] on true;
+> val it : {i:int, j:int option} list
+:t from i in [1, 2] right join j in [3, 4] on i = j;
+> val it : {i:int option, j:int} list
+:t from i in [1, 2] full join j in [3, 4] on i = j;
+> val it : {i:int option, j:int option} list
+(*) A variable bound inside the source (shadowing) is not the input.
+:t from i in [1, 2] right join j in (let val i = 9 in [i] end) on true;
+> val it : {i:int option, j:int} list
+(*) 'ordinal' inside a nested query refers to that query, not the input.
+:t from i in [1, 2]
+  right join j in (from x in [10, 20] yield ordinal) on true;
+> val it : {i:int option, j:int} list
+(* Nested outer joins stack 'option' layers (preserve model). *)
+:t from i in [1, 2]
+  right join j in [3] on true
+  right join k in [4] on true;
+> val it : {i:int option option, j:int option, k:int} list
 
 :t from a in [1], b in [true] yield a;
 > val it : int list

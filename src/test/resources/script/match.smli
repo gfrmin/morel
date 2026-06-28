@@ -27,7 +27,7 @@ fun f 1 = 0;
 f 1;
 > val it = 0 : int
 f 2;
-> uncaught exception Bind
+> uncaught exception Bind [nonexhaustive binding failure]
 >   raised at: stdIn:1.5-1.12
 
 (*) Warning: match nonexhaustive, twice
@@ -46,7 +46,7 @@ fun f x =
 f 1;
 > val it = 3 : int
 f 2;
-> uncaught exception Bind
+> uncaught exception Bind [nonexhaustive binding failure]
 >   raised at: stdIn:3.9-3.16
 
 (*) Error: match redundant and nonexhaustive
@@ -72,8 +72,8 @@ fun f (1, _) = 1
 > stdIn:3.5-3.17 Error: match redundant
 >   raised at: stdIn:3.5-3.17
 
-(*) The Ackermann-Péter function
-(*) See "Recursion Equations as a Programming Language", D A Turner 1982
+(* The Ackermann-Péter function
+ * See "Recursion Equations as a Programming Language", D A Turner 1982 *)
 fun ack 0 n = n + 1
   | ack m 0 = ack (m - 1) 1
   | ack m n = ack (m - 1) (ack m (n - 1));
@@ -166,24 +166,24 @@ ack 3 3;
 (*) Non-exhaustive function
 fun f [(SOME i)] = i
   | f [] = 0;
-> 0.0-0.0 Warning: match nonexhaustive
->   raised at: 0.0-0.0
+> stdIn:1.5-2.13 Warning: match nonexhaustive
+>   raised at: stdIn:1.5-2.13
 > val f = fn : int option list -> int
 
 (*) Add NONE, still non-exhaustive
 fun f [(SOME i)] = i
   | f [NONE] = ~1
   | f [] = 0;
-> 0.0-0.0 Warning: match nonexhaustive
->   raised at: 0.0-0.0
+> stdIn:1.5-3.13 Warning: match nonexhaustive
+>   raised at: stdIn:1.5-3.13
 > val f = fn : int option list -> int
 
 (*) Allow list longer than 1, still non-exhaustive
 fun f [(SOME i)] = i
   | f [] = 0
   | f (one :: two :: rest) = ~2;
-> 0.0-0.0 Warning: match nonexhaustive
->   raised at: 0.0-0.0
+> stdIn:1.5-3.32 Warning: match nonexhaustive
+>   raised at: stdIn:1.5-3.32
 > val f = fn : int option list -> int
 
 (*) Exhaustive
@@ -275,8 +275,8 @@ fun classify (C01, RED) = "first, red"
   | classify (C33, _) = "thirty-third"
   | classify (C34, _) = "thirty-fourth"
   | classify (C35, GREEN) = "thirty-fifth";
-> 0.0-0.0 Warning: match nonexhaustive
->   raised at: 0.0-0.0
+> stdIn:1.5-35.43 Warning: match nonexhaustive
+>   raised at: stdIn:1.5-35.43
 > val classify = fn : big * color -> string
 
 fn (C01, RED) => "first"

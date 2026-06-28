@@ -30,28 +30,32 @@ val nan = Real.posInf / Real.posInf;
 
 Real;
 > val it =
->   {/=fn,abs=fn,ceil=fn,checkFloat=fn,compare=fn,copySign=fn,floor=fn,fmt=fn,
->    fromInt=fn,fromManExp=fn,fromString=fn,isFinite=fn,isNan=fn,isNormal=fn,
->    max=fn,maxFinite=3.4028235E38,min=fn,minNormalPos=1.1754944E~38,
->    minPos=1.4E~45,negInf=~inf,posInf=inf,precision=24,radix=2,realCeil=fn,
->    realFloor=fn,realMod=fn,realRound=fn,realTrunc=fn,rem=fn,round=fn,
->    sameSign=fn,sign=fn,signBit=fn,split=fn,toManExp=fn,toString=fn,trunc=fn,
->    unordered=fn}
->   : {/:real * real -> real, abs:real -> real, ceil:real -> int,
->      checkFloat:real -> real, compare:real * real -> order,
->      copySign:real * real -> real, floor:real -> int,
->      fmt:realfmt -> real -> string, fromInt:int -> real,
->      fromManExp:{exp:int, man:real} -> real, fromString:string -> real option,
->      isFinite:real -> bool, isNan:real -> bool, isNormal:real -> bool,
->      max:real * real -> real, maxFinite:real, min:real * real -> real,
->      minNormalPos:real, minPos:real, negInf:real, posInf:real, precision:int,
->      radix:int, realCeil:real -> real, realFloor:real -> real,
->      realMod:real -> real, realRound:real -> real, realTrunc:real -> real,
->      rem:real * real -> real, round:real -> int, sameSign:real * real -> bool,
->      sign:real -> int, signBit:real -> bool,
->      split:real -> {frac:real, whole:real},
->      toManExp:real -> {exp:int, man:real}, toString:real -> string,
->      trunc:real -> int, unordered:real * real -> bool}
+>   {*=fn,+=fn,-=fn,/=fn,<=fn,<==fn,<>=fn,==fn,>=fn,>==fn,abs=fn,ceil=fn,
+>    checkFloat=fn,compare=fn,copySign=fn,floor=fn,fmt=fn,fromInt=fn,
+>    fromManExp=fn,fromString=fn,isFinite=fn,isNan=fn,isNormal=fn,max=fn,
+>    maxFinite=3.4028235E38,min=fn,minNormalPos=1.1754944E~38,minPos=1.4E~45,
+>    negInf=~inf,posInf=inf,precision=24,radix=2,realCeil=fn,realFloor=fn,
+>    realMod=fn,realRound=fn,realTrunc=fn,rem=fn,round=fn,sameSign=fn,sign=fn,
+>    signBit=fn,split=fn,toManExp=fn,toString=fn,trunc=fn,unordered=fn,~=fn}
+>   : {*:real * real -> real, +:real * real -> real, -:real * real -> real,
+>       /:real * real -> real, <:real * real -> bool, <=:real * real -> bool,
+>       <>:real * real -> bool, =:real * real -> bool, >:real * real -> bool,
+>       >=:real * real -> bool, abs:real -> real, ceil:real -> int,
+>       checkFloat:real -> real, compare:real * real -> order,
+>       copySign:real * real -> real, floor:real -> int,
+>       fmt:realfmt -> real -> string, fromInt:int -> real,
+>       fromManExp:{exp:int, man:real} -> real,
+>       fromString:string -> real option, isFinite:real -> bool,
+>       isNan:real -> bool, isNormal:real -> bool, max:real * real -> real,
+>       maxFinite:real, min:real * real -> real, minNormalPos:real,
+>       minPos:real, negInf:real, posInf:real, precision:int, radix:int,
+>       realCeil:real -> real, realFloor:real -> real, realMod:real -> real,
+>       realRound:real -> real, realTrunc:real -> real,
+>       rem:real * real -> real, round:real -> int,
+>       sameSign:real * real -> bool, sign:real -> int, signBit:real -> bool,
+>       split:real -> {frac:real, whole:real},
+>       toManExp:real -> {exp:int, man:real}, toString:real -> string,
+>       trunc:real -> int, unordered:real * real -> bool, ~:real -> real}
 
 (*) val radix : int
 Real.radix;
@@ -146,6 +150,51 @@ Real.posInf / Real.negInf;
 > val it = 0 : real
 0.0 + ~0.0;
 > val it = 0 : real
+
+(* Arithmetic operators are also available as members of the Real structure. *)
+Real.`+` (1.0, 2.0);
+> val it = 3 : real
+Real.`+` (1.0, Real.posInf);
+> val it = inf : real
+Real.`-` (5.0, 2.0);
+> val it = 3 : real
+Real.`-` (Real.posInf, Real.posInf);
+> val it = nan : real
+Real.`*` (0.5, 34.6);
+> val it = 17.3 : real
+Real.`*` (0.0, Real.posInf);
+> val it = nan : real
+Real.`~` 2.0;
+> val it = ~2 : real
+Real.`~` Real.posInf;
+> val it = ~inf : real
+
+(* Comparison operators are also available as members. They return false if
+   either argument is NaN. *)
+Real.`<` (3.0, 5.0);
+> val it = true : bool
+Real.`<` (3.0, nan);
+> val it = false : bool
+Real.`<=` (3.0, 3.0);
+> val it = true : bool
+Real.`<=` (nan, 5.0);
+> val it = false : bool
+Real.`>` (5.0, 3.0);
+> val it = true : bool
+Real.`>` (3.0, nan);
+> val it = false : bool
+Real.`>=` (3.0, 3.0);
+> val it = true : bool
+Real.`>=` (3.0, Real.negInf);
+> val it = true : bool
+Real.`=` (1.0, 1.0);
+> val it = true : bool
+Real.`=` (1.0, 2.0);
+> val it = false : bool
+Real.`<>` (1.0, 2.0);
+> val it = true : bool
+Real.`<>` (1.0, 1.0);
+> val it = false : bool
 
 (* "rem (x, y)" returns the remainder x - n * y, where n = trunc (x / y). The
     result has the same sign as x and has absolute value less than the absolute
@@ -276,7 +325,7 @@ Real.sign Real.posInf;
 Real.sign Real.negInf;
 > val it = ~1 : int
 Real.sign nan;
-> uncaught exception Domain
+> uncaught exception Domain [domain error]
 >   raised at: stdIn:1.1-1.14
 Sys.plan ();
 > val it = "apply(fnValue Real.sign, argCode constant(NaN))" : string
@@ -305,7 +354,7 @@ Real.signBit (~nan);
 > val it = false : bool
 Sys.plan ();
 > val it =
->   "apply(fnValue Real.signBit, argCode apply(fnValue ~, argCode constant(NaN)))"
+>   "apply(fnValue Real.signBit, argCode apply(fnValue Real.~, argCode constant(NaN)))"
 >   : string
 Real.signBit (~(~nan));
 > val it = true : bool
@@ -653,9 +702,9 @@ List.map (fn x => (x, Real.fromManExp (Real.toManExp x)))
 > val it =
 >   [(1,1),(0,0),(~0,~0),(~1,~1),(0.5,0.5),(2,2),(1.23456E~5,1.23456E~5),
 >    (1.23456E~6,1.23456E~6),(1.23456E~7,1.23456E~7),(~1.23456E~6,~1.23456E~6),
->    (1.4E~45,1.4E~45),(1.1754944E~38,1.1754944E~38),(3.4028235E38,3.4028235E38),
->    (~3.4028235E38,~3.4028235E38),(inf,inf),(~inf,~inf),(nan,nan)]
->   : (real * real) list
+>    (1.4E~45,1.4E~45),(1.1754944E~38,1.1754944E~38),
+>    (3.4028235E38,3.4028235E38),(~3.4028235E38,~3.4028235E38),(inf,inf),
+>    (~inf,~inf),(nan,nan)] : (real * real) list
 
 (* "split r" returns {whole, frac}, where frac and whole are the fractional and
    integral parts of r, respectively. Specifically, whole is integral,
@@ -729,17 +778,17 @@ Real.checkFloat ~0.0;
 Real.checkFloat 1.5;
 > val it = 1.5 : real
 Real.checkFloat Real.posInf;
-> uncaught exception Overflow
+> uncaught exception Overflow [overflow]
 >   raised at: stdIn:1.1-1.28
 Real.checkFloat Real.negInf;
-> uncaught exception Overflow
+> uncaught exception Overflow [overflow]
 >   raised at: stdIn:1.1-1.28
 Real.checkFloat Real.minNormalPos;
 > val it = 1.1754944E~38 : real
 Real.checkFloat Real.minPos;
 > val it = 1.4E~45 : real
 Real.checkFloat nan;
-> uncaught exception Div
+> uncaught exception Div [divide by zero]
 >   raised at: stdIn:1.1-1.20
 
 (* "realFloor r", "realCeil r", "realTrunc r", "realRound r" convert real values
@@ -929,7 +978,7 @@ Real.fromString "nan";
 (* Side-by-side comparison of how each format handles a range of values.
  * To run in SML, prepend `open StringCvt;` (Morel exposes the constructors
  * at the top level). `Sys.set` is Morel-only; SML users will see the
- * record list in classic notation. *)
+ * record list in non-tabular notation. *)
 Sys.set ("output", "tabular");
 > val it = () : unit
 List.map (fn (Name, X) =>
@@ -1111,27 +1160,27 @@ Real.fmt (FIX (SOME 3)) (~1.0 / 0.0);
 
 (* Invalid precision raises Size. *)
 Real.fmt (SCI (SOME ~1)) 1.0;
-> uncaught exception Size
+> uncaught exception Size [size]
 >   raised at: stdIn:1.1-1.29
 Real.fmt (FIX (SOME ~1)) 1.0;
-> uncaught exception Size
+> uncaught exception Size [size]
 >   raised at: stdIn:1.1-1.29
 Real.fmt (GEN (SOME 0)) 1.0;
-> uncaught exception Size
+> uncaught exception Size [size]
 >   raised at: stdIn:1.1-1.28
 Real.fmt (GEN (SOME ~1)) 1.0;
-> uncaught exception Size
+> uncaught exception Size [size]
 >   raised at: stdIn:1.1-1.29
 (* Partial application validates the spec immediately,
  * before the second argument arrives. *)
 Real.fmt (SCI (SOME ~1));
-> uncaught exception Size
+> uncaught exception Size [size]
 >   raised at: stdIn:1.1-1.23
 Real.fmt (FIX (SOME ~1));
-> uncaught exception Size
+> uncaught exception Size [size]
 >   raised at: stdIn:1.1-1.23
 Real.fmt (GEN (SOME 0));
-> uncaught exception Size
+> uncaught exception Size [size]
 >   raised at: stdIn:1.1-1.22
 Real.fmt EXACT;
 > val it = fn : real -> string

@@ -38,6 +38,7 @@ import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Range;
 import com.google.common.collect.RangeSet;
+import com.google.common.primitives.UnsignedLong;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -115,6 +116,15 @@ public enum CoreBuilder {
                 : BigDecimal.valueOf(((Number) value).doubleValue()));
       case STRING:
         return stringLiteral((String) value);
+      case WORD:
+        // A non-BigDecimal value is a runtime word, i.e. the bit pattern of a
+        // signed long that should be read as unsigned.
+        return wordLiteral(
+            value instanceof BigDecimal
+                ? (BigDecimal) value
+                : new BigDecimal(
+                    UnsignedLong.fromLongBits(((Number) value).longValue())
+                        .bigIntegerValue()));
       case UNIT:
         return unitLiteral();
       default:
@@ -142,17 +152,17 @@ public enum CoreBuilder {
     return new Core.Literal(Op.INT_LITERAL, PrimitiveType.INT, value);
   }
 
-  /** Creates a {@code float} literal. */
+  /** Creates a {@code real} literal. */
   public Core.Literal realLiteral(BigDecimal value) {
     return new Core.Literal(Op.REAL_LITERAL, PrimitiveType.REAL, value);
   }
 
-  /** Creates a {@code float} literal with a non-normal value. */
+  /** Creates a {@code real} literal with a non-normal value. */
   public Core.Literal realLiteral(Float value) {
     return new Core.Literal(Op.REAL_LITERAL, PrimitiveType.REAL, value);
   }
 
-  /** Creates a string literal. */
+  /** Creates a {@code string} literal. */
   public Core.Literal stringLiteral(String value) {
     return new Core.Literal(Op.STRING_LITERAL, PrimitiveType.STRING, value);
   }
@@ -160,6 +170,11 @@ public enum CoreBuilder {
   /** Creates a unit literal. */
   public Core.Literal unitLiteral() {
     return new Core.Literal(Op.UNIT_LITERAL, PrimitiveType.UNIT, Unit.INSTANCE);
+  }
+
+  /** Creates a {@code word} literal. */
+  public Core.Literal wordLiteral(BigDecimal value) {
+    return new Core.Literal(Op.WORD_LITERAL, PrimitiveType.WORD, value);
   }
 
   /** Creates a function literal. */
@@ -633,8 +648,13 @@ public enum CoreBuilder {
 
   public Core.Scan scan(
       Core.StepEnv env, Core.Pat pat, Core.Exp exp, Core.Exp condition) {
+    return scan(Op.SCAN, env, pat, exp, condition);
+  }
+
+  public Core.Scan scan(
+      Op op, Core.StepEnv env, Core.Pat pat, Core.Exp exp, Core.Exp condition) {
     env = env.withOrdered(env.ordered && exp.type instanceof ListType);
-    return new Core.Scan(env, pat, exp, condition);
+    return new Core.Scan(op, env, pat, exp, condition);
   }
 
   public Core.Aggregate aggregate(
@@ -1103,7 +1123,7 @@ public enum CoreBuilder {
   }
 
   public Core.Exp not(TypeSystem typeSystem, Core.Exp a0) {
-    Core.Literal not = functionLiteral(typeSystem, BuiltIn.NOT);
+    Core.Literal not = functionLiteral(typeSystem, BuiltIn.BOOL_NOT);
     return apply(a0.pos, PrimitiveType.BOOL, not, a0);
   }
 

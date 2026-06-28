@@ -171,7 +171,13 @@ public class FromBuilder {
   }
 
   public FromBuilder scan(Core.Pat pat, Core.Exp exp, Core.Exp condition) {
-    if (exp.op == Op.FROM
+    return scan(Op.SCAN, pat, exp, condition);
+  }
+
+  public FromBuilder scan(
+      Op op, Core.Pat pat, Core.Exp exp, Core.Exp condition) {
+    if (op == Op.SCAN
+        && exp.op == Op.FROM
         && core.boolLiteral(true).equals(condition)
         && isSimplePat(pat, (Core.From) exp)
         && !containsOrdinal(exp)
@@ -252,9 +258,26 @@ public class FromBuilder {
       return yield_(
           uselessIfLast, env, core.record(typeSystem, nameExps), atom1);
     }
+    final int priorCount = bindings.size();
     Compiles.acceptBinding(typeSystem, pat, bindings);
+    if (op != Op.SCAN) {
+      // An outer join makes the fields on one or both sides optional (so that
+      // an absent row can be represented as 'NONE'). A 'left'/'full' join wraps
+      // the newly scanned fields; a 'right'/'full' join wraps the fields of
+      // earlier steps. Wrapping is additive, so nested outer joins stack
+      // 'option' layers.
+      for (int i = 0; i < bindings.size(); i++) {
+        final boolean wrap =
+            i < priorCount ? op.optionalizesLeft() : op.optionalizesRight();
+        if (wrap) {
+          final Binding b = bindings.get(i);
+          bindings.set(
+              i, Binding.of(b.id.withType(typeSystem.option(b.id.type))));
+        }
+      }
+    }
     atom = bindings.size() == 1;
-    return addStep(core.scan(stepEnv(), pat, exp, condition));
+    return addStep(core.scan(op, stepEnv(), pat, exp, condition));
   }
 
   /** Returns whether a expression calls {@code ordinal}. */
@@ -284,9 +307,27 @@ public class FromBuilder {
    * a {@code yield}, it would not be safe to inline, because the rebuilt
    * projection would reference the dropped yield's binding, which is no longer
    * in scope.
+   *
+   * <p>It is also unsafe to inline unless every step that would be merged (all
+   * but a trailing {@code yield}) is a {@code scan} or {@code where}. Those
+   * steps distribute over the enclosing loop, but steps such as {@code take},
+   * {@code skip}, {@code order} and {@code group} do not. For example, in
+   * {@code from i in [1,2,3], j in (from k in ["a","b","c"] take i)} the
+   * subquery's {@code take} must be applied per outer row; merging it into the
+   * enclosing {@code from} would turn it into a single {@code take} over the
+   * whole stream (and, being lateral, would read {@code i} before it is bound).
    */
   private boolean safeToInline(Core.From from) {
-    return bindings.isEmpty() || last(from.steps).op != Op.YIELD;
+    if (bindings.isEmpty()) {
+      // The subquery is the first source, so there is no enclosing loop to
+      // distribute over; inlining any steps preserves meaning.
+      return true;
+    }
+    if (last(from.steps).op == Op.YIELD) {
+      return false;
+    }
+    return from.steps.stream()
+        .allMatch(step -> step.op == Op.SCAN || step.op == Op.WHERE);
   }
 
   private static boolean isSimplePat(Core.Pat pat, Core.From exp) {
@@ -563,7 +604,7 @@ public class FromBuilder {
 
     @Override
     protected void visit(Core.Scan scan) {
-      scan(scan.pat, scan.exp, scan.condition);
+      scan(scan.op, scan.pat, scan.exp, scan.condition);
     }
 
     @Override

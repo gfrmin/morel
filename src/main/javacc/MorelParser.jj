@@ -44,6 +44,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -101,15 +102,28 @@ public class MorelParserImpl implements MorelParser
   /** Reads the position of the upcoming Token, but does not make it current. */
   final public Pos nextTokenPos() {
     if (token.next == null) {
-       token.next = token_source.getNextToken();
+       try {
+         token.next = token_source.getNextToken();
+       } catch (Error e) {
+         // A lexical error here (a TokenMgrError) would otherwise escape
+         // uncaught, because the caller is not inside a parse method.
+         throw wrap(e);
+       }
     }
     return pos(token.next);
   }
 
   @Override
-  public MorelParseException wrap(Exception x) {
-    ParseException e = (ParseException) x;
-    return new MorelParseException(e, pos(e.currentToken.next));
+  public MorelParseException wrap(Throwable x) {
+    if (x instanceof ParseException) {
+      ParseException e = (ParseException) x;
+      return new MorelParseException(e, pos(e.currentToken.next));
+    }
+    // A lexical error is a TokenMgrError, an Error rather than an Exception, so
+    // catch it (and any other Error) here rather than letting it crash the
+    // shell.
+    return new MorelParseException(
+        x, Parsers.lexicalPos(x.getMessage(), file, lineOffset));
   }
 
   /** As {@link #statementEof()}, but wraps any exception as a
@@ -117,7 +131,7 @@ public class MorelParserImpl implements MorelParser
   public AstNode statementEofSafe() {
     try {
       return statementEof();
-    } catch (ParseException e) {
+    } catch (ParseException | Error e) {
       throw wrap(e);
     }
   }
@@ -127,7 +141,7 @@ public class MorelParserImpl implements MorelParser
   public Ast.Literal literalEofSafe() {
     try {
       return literalEof();
-    } catch (ParseException e) {
+    } catch (ParseException | Error e) {
       throw wrap(e);
     }
   }
@@ -137,7 +151,7 @@ public class MorelParserImpl implements MorelParser
   public Ast.Decl declEofSafe() {
     try {
       return declEof();
-    } catch (ParseException e) {
+    } catch (ParseException | Error e) {
       throw wrap(e);
     }
   }
@@ -147,7 +161,7 @@ public class MorelParserImpl implements MorelParser
   public Ast.Exp expressionSafe() {
     try {
       return expression();
-    } catch (ParseException e) {
+    } catch (ParseException | Error e) {
       throw wrap(e);
     }
   }
@@ -157,7 +171,7 @@ public class MorelParserImpl implements MorelParser
   public AstNode statementSemicolonSafe() {
     try {
       return statementSemicolon();
-    } catch (ParseException e) {
+    } catch (ParseException | Error e) {
       throw wrap(e);
     }
   }
@@ -167,7 +181,7 @@ public class MorelParserImpl implements MorelParser
   public AstNode statementSemicolonOrEofSafe() {
     try {
       return statementSemicolonOrEof();
-    } catch (ParseException e) {
+    } catch (ParseException | Error e) {
       throw wrap(e);
     }
   }
@@ -177,7 +191,7 @@ public class MorelParserImpl implements MorelParser
   public Ast.Type typeSafe() {
     try {
       return type();
-    } catch (ParseException e) {
+    } catch (ParseException | Error e) {
       throw wrap(e);
     }
   }
@@ -203,6 +217,8 @@ Literal literal() :
   e = stringLiteral() { return e; }
 |
   e = charLiteral() { return e; }
+|
+  e = wordLiteral() { return e; }
 }
 
 /** Parses a literal expression followed by end-of-file. */
@@ -226,7 +242,7 @@ Literal numericLiteral() :
     } else {
       d = new BigDecimal(token.image);
     }
-    return ast.intLiteral(pos(), d);
+    return ast.intLiteral(pos().withText(token.image), d);
   }
 |
   <REAL_LITERAL> {
@@ -279,6 +295,20 @@ Literal charLiteral() : {}
 {
   <CHAR_LITERAL> {
     return ast.charLiteral(pos(), unquoteCharLiteral(token.image));
+  }
+}
+
+/** Parses a word literal, e.g. {@code 0w255} (decimal) or {@code 0wx1f}
+ * (hexadecimal). */
+Literal wordLiteral() : {}
+{
+  (<WORD_LITERAL> | <WORD_HEX_LITERAL>) {
+    final String image = token.image;
+    final boolean hex = image.length() > 2
+        && (image.charAt(2) == 'x' || image.charAt(2) == 'X');
+    final BigInteger value =
+        new BigInteger(image.substring(hex ? 3 : 2), hex ? 16 : 10);
+    return ast.wordLiteral(pos().withText(image), new BigDecimal(value));
   }
 }
 
@@ -522,7 +552,7 @@ Exp from() :
 {
   <FROM> { span = Span.of(pos()); }
   [ fromFirstScan(steps)
-    ( <COMMA> fromScan(steps) )*
+    ( <COMMA> fromScan(Op.SCAN, steps) )*
   ]
   ( fromStep(steps) )*
   {
@@ -540,7 +570,7 @@ Exp exists() :
 {
   <EXISTS> { span = Span.of(pos()); }
   [ fromFirstScan(steps)
-    ( <COMMA> fromScan(steps) )*
+    ( <COMMA> fromScan(Op.SCAN, steps) )*
   ]
   ( fromStep(steps) )*
   {
@@ -558,7 +588,7 @@ Exp forall() :
 {
   <FORALL> { span = Span.of(pos()); }
   [ fromFirstScan(steps)
-    ( <COMMA> fromScan(steps) )*
+    ( <COMMA> fromScan(Op.SCAN, steps) )*
   ]
   ( fromStep(steps) )*
   {
@@ -594,7 +624,7 @@ void fromFirstScan(List<FromStep> steps) :
   )
 }
 
-void fromScan(List<FromStep> steps) :
+void fromScan(Op op, List<FromStep> steps) :
 {
   final Id id;
   final Exp exp;
@@ -608,7 +638,7 @@ void fromScan(List<FromStep> steps) :
         | <SKIP_> | <TAKE> | <YIELD> | <YIELDALL> | <EOF>))
   id = identifier() {
     pat = ast.idPat(id.pos, id.name);
-    steps.add(ast.scan(id.pos.plus(pos()), pat, null, null));
+    steps.add(ast.scan(id.pos.plus(pos()), op, pat, null, null));
   }
 |
   pat = pat()
@@ -621,11 +651,12 @@ void fromScan(List<FromStep> steps) :
       { condition = null; }
     )
     {
-      steps.add(ast.scan(pat.pos.plus(pos()), pat, exp, condition));
+      steps.add(ast.scan(pat.pos.plus(pos()), op, pat, exp, condition));
     }
   |
     <EQ> exp = expression() {
-      steps.add(ast.scan(pat.pos.plus(pos()), pat, ast.fromEq(exp), null));
+      steps.add(
+          ast.scan(pat.pos.plus(pos()), op, pat, ast.fromEq(exp), null));
     }
   )
 }
@@ -649,9 +680,14 @@ void fromStep(List<FromStep> steps) :
   final boolean distinct;
 }
 {
-  <JOIN>
-  fromScan(steps)
-  ( <COMMA> fromScan(steps) )*
+  (
+    <LEFT> <JOIN> { op = Op.LEFT_JOIN; }
+  | <RIGHT> <JOIN> { op = Op.RIGHT_JOIN; }
+  | <FULL> <JOIN> { op = Op.FULL_JOIN; }
+  | <JOIN> { op = Op.SCAN; }
+  )
+  fromScan(op, steps)
+  ( <COMMA> fromScan(Op.SCAN, steps) )*
 |
   <DISTINCT> {
     steps.add(ast.distinct(pos()));
@@ -843,6 +879,7 @@ Exp expression9() :
   Exp arg;
   Id id;
   String fieldName;
+  boolean safe = false;
   final List<Attribute> attrs = new ArrayList<Attribute>();
 }
 {
@@ -853,8 +890,11 @@ Exp expression9() :
     // example, in "CLOSED (3,7).contains 5", the "(3,7)" is a non-Id atom
     // being passed as an argument; suppressing the DOT here lets expression8
     // attach ".contains 5" to the full "CLOSED (3,7)" application instead.
-    LOOKAHEAD({ getToken(1).kind == DOT && !(inArg && !isId(e)) })
-    <DOT>
+    LOOKAHEAD({ (getToken(1).kind == DOT || getToken(1).kind == QDOT)
+                && !(inArg && !isId(e)) })
+    // ".f" is a plain field projection or postfix method call; "?.f" is a
+    // safe-navigation projection through the receiver's functor.
+    ( <DOT> { safe = false; } | <QDOT> { safe = true; } )
     ( id = identifier() { fieldName = id.name; }
     | <NATURAL_LITERAL> { fieldName = token.image; }
     )
@@ -883,8 +923,10 @@ Exp expression9() :
       //   - getToken(2) != DOT prevents consuming an identifier that is
       //     itself followed by "." as a postfix arg (e.g. "expr.fn Id.g"
       //     must not consume "Id").
+      // Postfix method call applies only to plain ".f", never safe "?.f".
       LOOKAHEAD({
-          isAtomStart()
+          !safe
+          && isAtomStart()
           && !isModule(e)
           && (getToken(1).kind == LPAREN
               ? !isId(e) || BuiltIn.BY_METHOD_NAME.containsKey(fieldName)
@@ -894,7 +936,7 @@ Exp expression9() :
       { e = ast.postfixApp(pos(), e, fieldName, arg); }
     |
       {
-        final Exp s = ast.recordSelector(pos(), fieldName);
+        final Exp s = ast.recordSelector(pos(), fieldName, safe);
         e = ast.apply(s, e);
       }
     )
@@ -2366,14 +2408,17 @@ AstNode statementEof() :
 | < EXISTS: "exists" >
 | < FORALL: "forall" >
 | < FROM: "from" >
+| < FULL: "full" >
 | < GROUP: "group" >
 | < IMPLIES: "implies" >
 | < INTERSECT: "intersect" >
 | < INTO: "into" >
 | < JOIN: "join" >
+| < LEFT: "left" >
 | < NOT_ELEM: "notelem" >
 | < ON: "on" >
 | < ORDER: "order" >
+| < RIGHT: "right" >
 | < ORDINAL: "ordinal" >
 | < REQUIRE: "require" >
 | < SKIP_: "skip" >
@@ -2416,6 +2461,10 @@ AstNode statementEof() :
                      <DOUBLE_QUOTE> >
     |
     < CHAR_LITERAL: ("#") <QUOTED_STRING> >
+    |
+    < WORD_HEX_LITERAL: "0wx" (["0"-"9", "a"-"f", "A"-"F"])+ >
+    |
+    < WORD_LITERAL: "0w" (["0"-"9"])+ >
 }
 
 /* SEPARATORS */
@@ -2433,6 +2482,7 @@ AstNode statementEof() :
     | < RBRACKET: "]" >
     | < SEMICOLON: ";" >
     | < BAR: "|" >
+    | < QDOT: "?." >
     | < DOT: "." >
     | < COMMA: "," >
     | < RARROW: "=>" >

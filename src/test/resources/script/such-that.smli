@@ -174,6 +174,51 @@ in
 end;
 > val it = [1,2,3,4,5] : int bag
 
+(* 'elem' over a finite range grounds the variable. ('j elem [1 .. 3]'
+   desugars to 'Range.contains', which is recognized as a finite
+   generator.) *)
+from j where j elem [1 .. 3];
+> val it = [1,2,3] : int bag
+
+(*) 'elem' over a range whose bounds depend on an earlier variable.
+from i, j where i elem [1, 2] andalso j elem [i + 1 .. i + 2];
+> i j
+> - -
+> 1 2
+> 1 3
+> 2 3
+> 2 4
+>
+> val it : {i:int, j:int} bag
+
+(*) An 'elem' over an infinite range does not ground the variable.
+from j where j elem [1 ..];
+> stdIn:1.6 Error: pattern 'j' is not grounded
+>   raised at: stdIn:1.6
+
+(* An infinite-range 'elem' combines with another bound to give a
+   finite generator: the lower bound comes from the range, the upper
+   from 'j < 3'. *)
+from j where j elem [0 ..] andalso j < 3;
+> val it = [0,1,2] : int bag
+from j where j elem [.. 3] andalso j > 0;
+> val it = [1,2,3] : int bag
+from j where j elem [0 ..] andalso j < 3 andalso j mod 2 = 0;
+> val it = [0,2] : int bag
+
+(*) The bounds may depend on an earlier variable.
+from i, j where i elem [1, 2] andalso j elem [i ..] andalso j < i + 3;
+> i j
+> - -
+> 1 1
+> 1 2
+> 1 3
+> 2 2
+> 2 3
+> 2 4
+>
+> val it : {i:int, j:int} bag
+
 (* -- andalso becomes join ---------------------------------------- *)
 val nums = [1, 2, 3, 4, 5];
 > val nums = [1,2,3,4,5] : int list
@@ -365,7 +410,7 @@ from x in [3, 5, 7], y where x > y andalso x < y + 5 yield y;
 > val it = [~1,0,1,2,1,2,3,4,3,4,5,6] : int bag
 Sys.planEx "3";
 > val it =
->   "val it = from x in [3, 5, 7] join y in #fromList Bag (#flatten Range ([OPEN (-:int (x, 5), x)])) yield y"
+>   "val it = from x in [3, 5, 7] join y in #fromList Bag (#flatten Range ([OPEN (#- Int (x, 5), x)])) yield y"
 >   : string
 
 from x in [3, 5, 7], y
@@ -373,14 +418,14 @@ from x in [3, 5, 7], y
   group y compute count over ();
 > count y
 > ----- --
+>     1 -1
+>     1  0
 >     2  1
 >     2  2
 >     2  3
 >     2  4
 >     1  5
 >     1  6
->     1 -1
->     1  0
 >
 > val it : {count:int, y:int} bag
 
@@ -424,8 +469,8 @@ from x, y in [2,3] where x > y andalso true where x < 5;
 >
 > val it : {x:int, y:int} bag
 
-(*) Unbound variables in declared 'join';
-(*) condition on 'j' occurs after 'join'
+(* Unbound variables in declared 'join';
+ * condition on 'j' occurs after 'join' *)
 from i, j
 where i > 0 andalso i < 3
 join k, m
@@ -686,9 +731,9 @@ yield {dno, name = #dname v};
 >
 > val it : {dno:int, name:string} bag
 
-(*) Forward references are required. 'dno' is infinite until we see the
-(*) condition 'v.deptno = dno', and at that point we haven't declared
-(*) 'v'. So we defer 'dno' until after 'v'.
+(* Forward references are required. 'dno' is infinite until we see the
+ * condition 'v.deptno = dno', and at that point we haven't declared
+ * 'v'. So we defer 'dno' until after 'v'. *)
 from dno, name, v
 where v elem scott.depts
 where v.deptno = dno
@@ -731,8 +776,13 @@ yield {dno = #deptno v, name = #dname v};
 (*) We can iterate over a finite datatype
 from i
 where Option.getOpt i;
-> val it = [(NONE,true),(SOME true,false),(SOME true,true)]
->   : (bool option * bool) bag
+> 1    2
+> ---- -----
+>      true
+> true false
+> true true
+>
+> val it : (bool option * bool) bag
 
 (*) If the expression is 'elem set' we can deduce the extent.
 from e
@@ -768,9 +818,9 @@ end;
 fun isEmp e =
   e elem scott.emps;
 > val isEmp = fn
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} -> bool
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real}
+>      -> bool
 from e
   where isEmp e andalso e.deptno = 20
   yield e.ename;
@@ -780,9 +830,9 @@ from e
 fun isClerk e =
   e elem scott.emps andalso e.job = "CLERK";
 > val isClerk = fn
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} -> bool
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real}
+>      -> bool
 from e
   where isClerk e andalso e.deptno = 20
   yield e.ename;
@@ -805,9 +855,9 @@ fun hasJob (e: typeof (Bag.hd scott.emps),
             job) =
   e.job = job;
 > val hasJob = fn
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} * string -> bool
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real} * string
+>      -> bool
 
 (*) Valid, because the argument has an extent.
 from e in scott.emps,
@@ -875,16 +925,16 @@ Sys.planEx "999";
 >   "val it = from s in [\"abcd\", \"ant\"] join p in #tabulate Bag (#size String s + 1, fn i => #substring String (s, 0, i)) yield p group p where #nonEmpty Relational (from s in [\"abcd\", \"ant\"] where #isPrefix String p s) order p"
 >   : string
 
-(*) A string function with external extent.
-(*) Given s2, we could generate finite s1.
+(* A string function with external extent.
+ * Given s2, we could generate finite s1. *)
 fun isPrefix (s1, s2) =
   String.isPrefix s1 s2;
 > val isPrefix = fn : string * string -> bool
 from s where isPrefix (s, "abcd");
 > val it = ["","a","ab","abc","abcd"] : string bag
 
-(*) An integer function with external extent.
-(*) Given j, k we could generate finite i.
+(* An integer function with external extent.
+ * Given j, k we could generate finite i. *)
 let
   fun isBetween (i, j, k) = j <= i andalso i <= k
 in
@@ -925,9 +975,9 @@ end;
 fun isClerk e =
   e elem scott.emps andalso e.job = "CLERK";
 > val isClerk = fn
->   :
->     {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
->      job:string, mgr:int, sal:real} -> bool
+>   : {comm:real, deptno:int, empno:int, ename:string, hiredate:string,
+>       job:string, mgr:int, sal:real}
+>      -> bool
 
 let
   fun enumerate predicate =
@@ -1183,9 +1233,9 @@ in
 end;
 > x z
 > - -
-> 4 3
-> 1 2
 > 1 3
+> 1 2
+> 4 3
 >
 > val it : {x:int, z:int} bag
 
@@ -1197,9 +1247,9 @@ from x, z
   distinct;
 > x z
 > - -
-> 4 3
-> 1 2
 > 1 3
+> 1 2
+> 4 3
 >
 > val it : {x:int, z:int} bag
 
@@ -1209,9 +1259,9 @@ from x, z
   distinct;
 > x z
 > - -
-> 4 3
-> 1 2
 > 1 3
+> 1 2
+> 4 3
 >
 > val it : {x:int, z:int} bag
 
@@ -1291,12 +1341,12 @@ from x where isS3 x;
 > Unsafe
 *)
 
-(*) Ungrounded tuple-pattern call. The body of `tuPair` places no
-(*) constraint on its arguments, so neither component of `p` can
-(*) be grounded. morel-java reports `pattern 'p' is not grounded`;
-(*) `destructure_tuple_extents_for_fn_calls` splits `p` into
-(*) `p__1, p__2` before this point, so morel-rust reports the
-(*) same shape using the destructured component name.
+(* Ungrounded tuple-pattern call. The body of `tuPair` places no
+ * constraint on its arguments, so neither component of `p` can
+ * be grounded. morel-java reports `pattern 'p' is not grounded`;
+ * `destructure_tuple_extents_for_fn_calls` splits `p` into
+ * `p__1, p__2` before this point, so morel-rust reports the
+ * same shape using the destructured component name. *)
 fun tuPair (a, b) = true;
 > val tuPair = fn : 'a * 'b -> bool
 from p where tuPair p;
@@ -1470,10 +1520,10 @@ from p where sib p;
 > 1 2
 > - -
 > b c
-> j k
+> c b
 > c e
 > e c
-> c b
+> j k
 > k j
 >
 > val it : (string * string) bag
@@ -1488,15 +1538,15 @@ from p where cousin p;
 > 1 2
 > - -
 > b c
-> j k
+> c b
 > c e
 > e c
-> c b
+> j k
 > k j
 > f g
+> g f
 > g i
 > i g
-> g f
 > k k
 >
 > val it : (string * string) bag
@@ -1630,19 +1680,19 @@ end;
 > 30 Scooby
 >
 > val it : {d:int, n:string} bag
-(*) Expected code:
-(*) "from(sink
-(*)   join(pat e, exp tuple(
-(*)   tuple(constant(10), constant(100), constant(Fred)),
-(*)   tuple(constant(20), constant(101), constant(Velma)),
-(*)   tuple(constant(30), constant(102), constant(Shaggy)),
-(*)   tuple(constant(30), constant(103), constant(Scooby))),
-(*)  sink yield(codes [tuple(apply(fnValue nth:2, argCode get(name e)), apply(fnValue nth:0, argCode get(name e)))], sink join(pat n_1, exp tuple( apply(fnValue nth:0, argCode get(name v$1))), sink join(pat d_1, exp tuple(constant(30)), sink where(condition apply2(fnValue elem,
-(*)                             tuple(get(name n), get(name d)), from(sink join(pat e, exp tuple(
-(*)   tuple(constant(10), constant(100), constant(Fred)),
-(*)   tuple(constant(20), constant(101), constant(Velma)),
-(*)   tuple(constant(30), constant(102), constant(Shaggy)),
-(*)   tuple(constant(30), constant(103), constant(Scooby))), sink yield(codes [tuple(apply(fnValue nth:2, argCode get(name e)), apply(fnValue nth:0, argCode get(name e)))], sink apply(fnValue $.extent, argCode constant(()))))), sink where(condition apply2(fnValue =, get(name d), constant(30)), sink collect(tuple(get(name d), get(name n)))))))))))"
+(* Expected code:
+ * "from(sink
+ *   join(pat e, exp tuple(
+ *   tuple(constant(10), constant(100), constant(Fred)),
+ *   tuple(constant(20), constant(101), constant(Velma)),
+ *   tuple(constant(30), constant(102), constant(Shaggy)),
+ *   tuple(constant(30), constant(103), constant(Scooby))),
+ *  sink yield(codes [tuple(apply(fnValue nth:2, argCode get(name e)), apply(fnValue nth:0, argCode get(name e)))], sink join(pat n_1, exp tuple( apply(fnValue nth:0, argCode get(name v$1))), sink join(pat d_1, exp tuple(constant(30)), sink where(condition apply2(fnValue elem,
+ *                             tuple(get(name n), get(name d)), from(sink join(pat e, exp tuple(
+ *   tuple(constant(10), constant(100), constant(Fred)),
+ *   tuple(constant(20), constant(101), constant(Velma)),
+ *   tuple(constant(30), constant(102), constant(Shaggy)),
+ *   tuple(constant(30), constant(103), constant(Scooby))), sink yield(codes [tuple(apply(fnValue nth:2, argCode get(name e)), apply(fnValue nth:0, argCode get(name e)))], sink apply(fnValue $.extent, argCode constant(()))))), sink where(condition apply2(fnValue =, get(name d), constant(30)), sink collect(tuple(get(name d), get(name n)))))))))))" *)
 (*
 Sys.planEx "code";
 > [actual output would appear here]
@@ -1885,27 +1935,27 @@ end;
 > 30 Scooby
 >
 > val it : {d:int, n:string} bag
-(*) Expected code:
-(*) "from(sink
-(*)   join(pat (n_1, d_1),
-(*)   exp apply(
-(*)     fnCode apply(fnValue List.filter,
-(*)       argCode match(v$0,
-(*)         apply(fnCode match((n_1, d_1),
-(*)             apply(fnCode match((n, d),
-(*)                 apply2(fnValue elem,
-(*)                   tuple(get(name n), get(name d)),
-(*)                   from(sink
-(*)                     join(pat e, exp tuple(
-(*)   tuple(constant(30), constant(102), constant(Shaggy)),
-(*)   tuple(constant(30), constant(103), constant(Scooby))),
-(*)       sink collect(tuple(apply(fnValue nth:2, argCode get(name e)),
-(*)         apply(fnValue nth:0, argCode get(name e)))))))),
-(*)                argCode tuple(get(name n), get(name d)))),
-(*)             argCode get(name v$0)))),
-(*)           argCode apply(fnValue $.extent, argCode constant(()))),
-(*)         sink where(condition apply2(fnValue =, get(name d), constant(30)),
-(*)           sink collect(tuple(get(name d), get(name n))))))"
+(* Expected code:
+ * "from(sink
+ *   join(pat (n_1, d_1),
+ *   exp apply(
+ *     fnCode apply(fnValue List.filter,
+ *       argCode match(v$0,
+ *         apply(fnCode match((n_1, d_1),
+ *             apply(fnCode match((n, d),
+ *                 apply2(fnValue elem,
+ *                   tuple(get(name n), get(name d)),
+ *                   from(sink
+ *                     join(pat e, exp tuple(
+ *   tuple(constant(30), constant(102), constant(Shaggy)),
+ *   tuple(constant(30), constant(103), constant(Scooby))),
+ *       sink collect(tuple(apply(fnValue nth:2, argCode get(name e)),
+ *         apply(fnValue nth:0, argCode get(name e)))))))),
+ *                argCode tuple(get(name n), get(name d)))),
+ *             argCode get(name v$0)))),
+ *           argCode apply(fnValue $.extent, argCode constant(()))),
+ *         sink where(condition apply2(fnValue =, get(name d), constant(30)),
+ *           sink collect(tuple(get(name d), get(name n))))))" *)
 (*
 Sys.planEx "code";
 > [actual output would appear here]

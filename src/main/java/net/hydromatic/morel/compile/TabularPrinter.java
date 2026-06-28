@@ -23,10 +23,12 @@ import com.google.common.collect.ImmutableList;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.function.BiFunction;
 import net.hydromatic.morel.eval.Codes;
+import net.hydromatic.morel.type.DataType;
 import net.hydromatic.morel.type.PrimitiveType;
 import net.hydromatic.morel.type.RecordLikeType;
 import net.hydromatic.morel.type.RecordType;
@@ -134,6 +136,7 @@ class TabularPrinter {
    *
    * <ul>
    *   <li>a primitive (scalar leaf);
+   *   <li>an option of a primitive (scalar leaf; {@code NONE} prints as blank);
    *   <li>a collection of primitives (scalar list);
    *   <li>a collection of records or tuples, each field of which is itself
    *       tabular-printable as a field (recursive).
@@ -142,6 +145,21 @@ class TabularPrinter {
   private static boolean canPrintField(Type type) {
     if (type instanceof PrimitiveType) {
       return true;
+    }
+    if (optionScalar(type) != null) {
+      return true;
+    }
+    // A bare record or tuple field: a one-row nested sub-table.
+    if (type instanceof RecordType || type instanceof TupleType) {
+      return canPrintRecord((RecordLikeType) type);
+    }
+    // A record/tuple 'option' field: a nested sub-table, blank for 'NONE'. It
+    // is renderable only if at least one field is non-option; otherwise a
+    // 'NONE' (every cell blank) could not be told apart from a 'SOME' whose
+    // every field happens to be 'NONE'.
+    final RecordLikeType optionRecord = optionRecord(type);
+    if (optionRecord != null) {
+      return canPrintRecord(optionRecord) && !allFieldsOption(optionRecord);
     }
     if (type.isCollection()) {
       Type elementType = type.elementType();
@@ -154,6 +172,49 @@ class TabularPrinter {
       }
     }
     return false;
+  }
+
+  /**
+   * If {@code type} is {@code T option} where {@code T} is a record or tuple,
+   * returns {@code T}; otherwise returns null.
+   */
+  private static @Nullable RecordLikeType optionRecord(Type type) {
+    if (type instanceof DataType) {
+      final DataType dataType = (DataType) type;
+      if (dataType.name.equals("option")
+          && (dataType.arg(0) instanceof RecordType
+              || dataType.arg(0) instanceof TupleType)) {
+        return (RecordLikeType) dataType.arg(0);
+      }
+    }
+    return null;
+  }
+
+  /** Returns whether every field of {@code recordType} has an option type. */
+  private static boolean allFieldsOption(RecordLikeType recordType) {
+    return PairList.viewOf(recordType.argNameTypes())
+        .allMatch((label, type) -> isOption(type));
+  }
+
+  /** Returns whether {@code type} is an {@code option}. */
+  private static boolean isOption(Type type) {
+    return type instanceof DataType && ((DataType) type).name.equals("option");
+  }
+
+  /**
+   * If {@code type} is {@code T option} where {@code T} is a primitive, returns
+   * {@code T}; otherwise returns null. Such a field is rendered as a scalar
+   * column: {@code SOME x} as {@code x}, and {@code NONE} as a blank cell.
+   */
+  private static @Nullable PrimitiveType optionScalar(Type type) {
+    if (type instanceof DataType) {
+      final DataType dataType = (DataType) type;
+      if (dataType.name.equals("option")
+          && dataType.arg(0) instanceof PrimitiveType) {
+        return (PrimitiveType) dataType.arg(0);
+      }
+    }
+    return null;
   }
 
   /** Emits one header line for the given top-level sections. */
@@ -215,6 +276,12 @@ class TabularPrinter {
     if (value instanceof Float) {
       return Codes.floatToString((Float) value);
     }
+    if (value instanceof Long) {
+      // The only Long-backed primitive type is 'word'; print it in hexadecimal,
+      // like classic mode (and Word.toString).
+      return "0wx"
+          + Long.toUnsignedString((Long) value, 16).toUpperCase(Locale.ROOT);
+    }
     if (value instanceof String && stringDepth >= 0) {
       final String s = (String) value;
       if (s.length() > stringDepth) {
@@ -223,6 +290,20 @@ class TabularPrinter {
       return s;
     }
     return value.toString();
+  }
+
+  /**
+   * Renders the value of a {@code string option} cell so that it cannot be
+   * confused with the blank cell used for {@code NONE}. A string is shown as an
+   * SML string literal (in double-quotes, with embedded double-quotes and
+   * backslashes escaped) if it is empty or contains a double-quote; otherwise
+   * it is shown verbatim (subject to {@code stringDepth} truncation).
+   */
+  private static String optionString(String s, int stringDepth) {
+    if (s.isEmpty() || s.indexOf('"') >= 0) {
+      return '"' + s.replace("\\", "\\\\").replace("\"", "\\\"") + '"';
+    }
+    return stringifyScalar(s, stringDepth);
   }
 
   /**
@@ -302,26 +383,70 @@ class TabularPrinter {
       RECORD_LIST
     }
 
+    /** For a {@link Kind#RECORD_LIST}, how its value maps to a list of rows. */
+    enum RecordShape {
+      /** Value is already a list of records (a nested collection). */
+      LIST,
+      /** Value is a single record; render it as a one-row sub-table. */
+      SINGLE,
+      /**
+       * Value is a record {@code option}; {@code SOME} is one row, {@code NONE}
+       * is no rows (so its columns are blank).
+       */
+      OPTION
+    }
+
     final Kind kind;
     final String name;
     final boolean rightAlign;
+    /**
+     * Whether a SCALAR value is wrapped in {@code option} (so {@code SOME x}
+     * prints as {@code x} and {@code NONE} as a blank cell).
+     */
+    final boolean optional;
+
+    /** For a RECORD_LIST, how its value maps to a list of records. */
+    final RecordShape shape;
+
     final List<Section> children;
     int width;
 
     private Section(
-        Kind kind, String name, boolean rightAlign, List<Section> children) {
+        Kind kind,
+        String name,
+        boolean rightAlign,
+        boolean optional,
+        List<Section> children) {
+      this(kind, name, rightAlign, optional, RecordShape.LIST, children);
+    }
+
+    private Section(
+        Kind kind,
+        String name,
+        boolean rightAlign,
+        boolean optional,
+        RecordShape shape,
+        List<Section> children) {
       this.kind = kind;
       this.name = name;
       this.rightAlign = rightAlign;
+      this.optional = optional;
+      this.shape = shape;
       this.children = children;
       this.width = name.length();
     }
 
     /** Builds a Section tree for a record-like (record or tuple) type. */
     static Section forRecord(String name, RecordLikeType recordType) {
+      return forRecord(name, recordType, RecordShape.LIST);
+    }
+
+    /** Builds a Section tree for a record-like type with a given shape. */
+    static Section forRecord(
+        String name, RecordLikeType recordType, RecordShape shape) {
       final List<Section> children =
           transformEntries(recordType.argNameTypes(), Section::forField);
-      return new Section(Kind.RECORD_LIST, name, false, children);
+      return new Section(Kind.RECORD_LIST, name, false, false, shape, children);
     }
 
     /** Builds a Section for one field of a record-like type. */
@@ -331,7 +456,23 @@ class TabularPrinter {
             Kind.SCALAR,
             name,
             isNumeric((PrimitiveType) type),
+            false,
             ImmutableList.of());
+      }
+      final PrimitiveType optionType = optionScalar(type);
+      if (optionType != null) {
+        return new Section(
+            Kind.SCALAR, name, isNumeric(optionType), true, ImmutableList.of());
+      }
+      // A bare record or tuple field renders as a one-row nested sub-table.
+      if (type instanceof RecordType || type instanceof TupleType) {
+        return forRecord(name, (RecordLikeType) type, RecordShape.SINGLE);
+      }
+      // A record/tuple 'option' field renders as a nested sub-table that is
+      // blank for 'NONE'.
+      final RecordLikeType optionRecord = optionRecord(type);
+      if (optionRecord != null) {
+        return forRecord(name, optionRecord, RecordShape.OPTION);
       }
       final Type elementType = type.elementType();
       if (elementType instanceof PrimitiveType) {
@@ -339,6 +480,7 @@ class TabularPrinter {
             Kind.SCALAR_LIST,
             name,
             isNumeric((PrimitiveType) elementType),
+            false,
             ImmutableList.of());
       }
       // Element is a record or tuple: recurse.
@@ -346,7 +488,9 @@ class TabularPrinter {
     }
 
     private static boolean isNumeric(PrimitiveType type) {
-      return type == PrimitiveType.INT || type == PrimitiveType.REAL;
+      return type == PrimitiveType.INT
+          || type == PrimitiveType.REAL
+          || type == PrimitiveType.WORD;
     }
 
     /**
@@ -364,7 +508,25 @@ class TabularPrinter {
       switch (kind) {
         case SCALAR:
           {
-            final String s = stringifyScalar(value, stringDepth);
+            final String s;
+            if (optional) {
+              // Runtime form: NONE is ["NONE"]; SOME x is ["SOME", x].
+              final List<?> option = (List<?>) value;
+              if (option.size() == 1) {
+                s = ""; // NONE: a blank cell
+              } else {
+                final Object some = option.get(1);
+                // A 'string option' value must be distinguishable from the
+                // blank 'NONE' cell, so an empty or quote-containing string is
+                // shown as a quoted SML string literal.
+                s =
+                    some instanceof String
+                        ? optionString((String) some, stringDepth)
+                        : stringifyScalar(some, stringDepth);
+              }
+            } else {
+              s = stringifyScalar(value, stringDepth);
+            }
             final List<String> lines = foldString(s, stringFold);
             for (String line : lines) {
               if (line.length() > width) {
@@ -399,10 +561,30 @@ class TabularPrinter {
         case RECORD_LIST:
         default:
           {
+            // Normalize the value to a list of records according to the shape:
+            // a nested collection is already a list; a single record becomes a
+            // one-element list; a record option becomes empty (NONE) or a
+            // one-element list (SOME).
+            final List<List<?>> recordList;
+            switch (shape) {
+              case SINGLE:
+                recordList = ImmutableList.of((List<?>) value);
+                break;
+              case OPTION:
+                final List<?> option = (List<?>) value;
+                recordList =
+                    option.size() == 1
+                        ? ImmutableList.of()
+                        : ImmutableList.of((List<?>) option.get(1));
+                break;
+              case LIST:
+              default:
+                recordList = (List<List<?>>) value;
+            }
             final List<List<Cell>> records = new ArrayList<>();
             boolean truncated = false;
             int count = 0;
-            for (List<?> record : (List<List<?>>) value) {
+            for (List<?> record : recordList) {
               if (printLength >= 0 && count >= printLength) {
                 truncated = true;
                 break;

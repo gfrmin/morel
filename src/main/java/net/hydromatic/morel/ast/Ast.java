@@ -32,6 +32,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
+import com.google.common.primitives.UnsignedLong;
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -96,7 +98,7 @@ public class Ast {
     }
 
     AstWriter unparse(AstWriter w, int left, int right) {
-      return w.id(name);
+      return w.idQuoted(name);
     }
   }
 
@@ -117,7 +119,8 @@ public class Ast {
               || op == Op.CHAR_LITERAL_PAT
               || op == Op.INT_LITERAL_PAT
               || op == Op.REAL_LITERAL_PAT
-              || op == Op.STRING_LITERAL_PAT);
+              || op == Op.STRING_LITERAL_PAT
+              || op == Op.WORD_LITERAL_PAT);
     }
 
     @Override
@@ -142,6 +145,10 @@ public class Ast {
     }
 
     AstWriter unparse(AstWriter w, int left, int right) {
+      if (op == Op.WORD_LITERAL_PAT) {
+        return w.appendLiteral(
+            UnsignedLong.valueOf(((BigDecimal) value).toBigIntegerExact()));
+      }
       return w.appendLiteral(value);
     }
   }
@@ -904,7 +911,7 @@ public class Ast {
           fieldTypes,
           (i, field, type) ->
               w.append(i > 0 ? ", " : "")
-                  .id(field)
+                  .idQuoted(field)
                   .append(": ")
                   .append(type, 0, 0));
       return w.append("}");
@@ -1105,7 +1112,7 @@ public class Ast {
 
     @Override
     AstWriter unparse(AstWriter w, int left, int right) {
-      return w.id(name);
+      return w.idQuoted(name);
     }
 
     @Override
@@ -1235,10 +1242,23 @@ public class Ast {
   public static class RecordSelector extends Exp {
     public final String name;
 
+    /**
+     * Whether this is a safe-navigation selector ({@code e?.f}), which projects
+     * the field through the receiver's functor (e.g. {@code Option.map #f e}),
+     * rather than a plain selector ({@code #f e}).
+     */
+    public final boolean safe;
+
     /** Creates a record selector. */
     RecordSelector(Pos pos, String name) {
+      this(pos, name, false);
+    }
+
+    /** Creates a plain or safe-navigation record selector. */
+    RecordSelector(Pos pos, String name, boolean safe) {
       super(pos, Op.RECORD_SELECTOR);
       this.name = requireNonNull(name);
+      this.safe = safe;
       assert !name.startsWith("#");
     }
 
@@ -1299,6 +1319,10 @@ public class Ast {
 
     @Override
     AstWriter unparse(AstWriter w, int left, int right) {
+      if (op == Op.WORD_LITERAL) {
+        return w.appendLiteral(
+            UnsignedLong.valueOf(((BigDecimal) value).toBigIntegerExact()));
+      }
       return w.appendLiteral(value);
     }
   }
@@ -2161,7 +2185,7 @@ public class Ast {
     }
 
     AstWriter unparse(AstWriter w, int left, int right) {
-      w.id(name);
+      w.idQuoted(name);
       for (Pat pat : patList) {
         w.append(" ").append(pat, Op.APPLY.left, Op.APPLY.right);
       }
@@ -2809,11 +2833,24 @@ public class Ast {
         forEachIndexed(
             steps,
             (step, i) -> {
-              if (step.op == Op.SCAN && i > 0) {
-                if (steps.get(i - 1).op == Op.SCAN) {
-                  w.append(",");
-                } else {
-                  w.append(" join");
+              if (step.op.isJoin() && i > 0) {
+                switch (step.op) {
+                  case SCAN:
+                    // A bare scan after another scan is a comma; after a
+                    // non-scan step (e.g. group) it is an inner join.
+                    w.append(steps.get(i - 1).op == Op.SCAN ? "," : " join");
+                    break;
+                  case LEFT_JOIN:
+                    w.append(" left join");
+                    break;
+                  case RIGHT_JOIN:
+                    w.append(" right join");
+                    break;
+                  case FULL_JOIN:
+                    w.append(" full join");
+                    break;
+                  default:
+                    break;
                 }
               }
               step.unparse(w, 0, 0);
@@ -2935,8 +2972,9 @@ public class Ast {
     public final @Nullable Exp exp;
     public final @Nullable Exp condition;
 
-    Scan(Pos pos, Pat pat, @Nullable Exp exp, @Nullable Exp condition) {
-      super(pos, Op.SCAN);
+    Scan(Pos pos, Op op, Pat pat, @Nullable Exp exp, @Nullable Exp condition) {
+      super(pos, op);
+      checkArgument(op.isJoin(), "not a join: %s", op);
       this.pat = pat;
       this.exp = exp;
       this.condition = condition;
@@ -2944,7 +2982,9 @@ public class Ast {
 
     @Override
     AstWriter unparse(AstWriter w, int left, int right) {
-      w.append(op.padded).append(pat, 0, 0);
+      // The join keyword (",", "join", "left join", ...) is emitted by
+      // From.unparse; here we just separate from it with a space.
+      w.append(" ").append(pat, 0, 0);
       if (exp != null) {
         if (exp.op == Op.FROM_EQ) {
           w.append(" = ").append(((PrefixCall) this.exp).a, Op.EQ.right, 0);
@@ -2973,7 +3013,7 @@ public class Ast {
               && Objects.equals(this.exp, exp)
               && Objects.equals(this.condition, condition)
           ? this
-          : new Scan(pos, pat, exp, condition);
+          : new Scan(pos, op, pat, exp, condition);
     }
   }
 
@@ -3540,6 +3580,13 @@ public class Ast {
 
     @Override
     AstWriter unparse(AstWriter w, int left, int right) {
+      if (fn instanceof RecordSelector && ((RecordSelector) fn).safe) {
+        // Safe navigation "e?.f" unparses postfix; the plain selector "#f e"
+        // has no prefix safe spelling.
+        return w.append(arg, left, op.left)
+            .append("?.")
+            .append(((RecordSelector) fn).name);
+      }
       return w.infix(left, fn, op, arg, right);
     }
 

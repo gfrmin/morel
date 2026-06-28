@@ -43,10 +43,13 @@ import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Deque;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -82,6 +85,7 @@ import net.hydromatic.morel.type.ListType;
 import net.hydromatic.morel.type.MultiType;
 import net.hydromatic.morel.type.ParameterizedType;
 import net.hydromatic.morel.type.PrimitiveType;
+import net.hydromatic.morel.type.RecordLikeType;
 import net.hydromatic.morel.type.RecordType;
 import net.hydromatic.morel.type.TupleType;
 import net.hydromatic.morel.type.Type;
@@ -147,6 +151,7 @@ public class TypeResolver {
   static final String ARG_TY_CON = "$arg";
   static final String OVERLOAD_TY_CON = BuiltIn.Datatype.OVERLOAD.mlName();
   static final String LIST_TY_CON = "list";
+  static final String OPTION_TY_CON = BuiltIn.Datatype.OPTION.mlName();
   static final String RECORD_TY_CON = "record";
   static final String FN_TY_CON = "fn";
 
@@ -230,7 +235,7 @@ public class TypeResolver {
                 + join("\n", transform(terms, Object::toString));
         final Failure failure = (Failure) result;
         throw new TypeException(
-            "Cannot deduce type: " + failure.reason(), Pos.ZERO);
+            "Cannot deduce type: " + failure.reason(), decl.pos);
       }
 
       final TypeMap typeMap0 =
@@ -273,8 +278,75 @@ public class TypeResolver {
       } else {
         checkNoUnresolvedFieldRefs(node2, typeMap);
       }
+      checkNumericOperators(node2, typeMap);
       return Resolved.of(env, decl, node2, typeMap);
     }
+  }
+
+  /**
+   * SML overload class {@code num}: types of {@code +}, {@code -}, {@code *},
+   * {@code ~}.
+   */
+  private static final EnumSet<PrimitiveType> NUM =
+      EnumSet.of(PrimitiveType.INT, PrimitiveType.REAL, PrimitiveType.WORD);
+
+  /** SML overload class {@code realint}: types of {@code abs}. */
+  private static final EnumSet<PrimitiveType> REALINT =
+      EnumSet.of(PrimitiveType.INT, PrimitiveType.REAL);
+
+  /** SML overload class {@code wordint}: types of {@code div}, {@code mod}. */
+  private static final EnumSet<PrimitiveType> WORDINT =
+      EnumSet.of(PrimitiveType.INT, PrimitiveType.WORD);
+
+  /**
+   * Returns the set of types for which an overloaded numeric operator is
+   * defined.
+   */
+  private static EnumSet<PrimitiveType> overloadDomain(BuiltIn builtIn) {
+    switch (builtIn) {
+      case OP_DIV:
+      case OP_MOD:
+        return WORDINT;
+      case ABS:
+        return REALINT;
+      default: // OP_PLUS, OP_MINUS, OP_TIMES, OP_NEGATE
+        return NUM;
+    }
+  }
+
+  /**
+   * Checks that arithmetic operators ({@code +}, {@code -}, {@code *}, {@code
+   * ~}, {@code abs}, {@code div}, {@code mod}) are applied to operands of a
+   * type in their overload class (see {@link #overloadDomain}). Throws a
+   * positioned {@link TypeException} otherwise, e.g. for "true + true".
+   */
+  private static void checkNumericOperators(Ast.Decl decl, TypeMap typeMap) {
+    decl.accept(
+        new Visitor() {
+          @Override
+          protected void visit(Ast.Apply apply) {
+            if (apply.fn instanceof Ast.Id) {
+              final String name = ((Ast.Id) apply.fn).name;
+              final BuiltIn builtIn = BuiltIn.BY_ML_NAME.get(name);
+              if (builtIn != null && builtIn.preferredType != null) {
+                final Type type = typeMap.getType(apply);
+                if (!(type instanceof TypeVar)
+                    && !overloadDomain(builtIn).contains(type)) {
+                  final String opName =
+                      name.startsWith("op ") ? name.substring(3) : name;
+                  throw new TypeException(
+                      "operator '"
+                          + opName
+                          + "' is not defined for type '"
+                          + type
+                          + "'",
+                      apply.pos);
+                }
+              }
+            }
+            super.visit(apply);
+          }
+        });
   }
 
   /**
@@ -328,6 +400,8 @@ public class TypeResolver {
                   (Ast.RecordSelector) apply.fn;
               if (typeMap.typeIsVariable(apply.arg)) {
                 variableConsumer.accept(apply);
+              } else if (recordSelector.safe) {
+                checkSafeNav(apply, recordSelector, typeMap);
               } else {
                 final Collection<String> fieldNames =
                     typeMap.typeFieldNames(apply.arg);
@@ -344,6 +418,59 @@ public class TypeResolver {
             super.visit(apply);
           }
         });
+  }
+
+  /**
+   * Checks a resolved safe-navigation selector {@code e?.f}: the receiver must
+   * be a record wrapped in one or more functor layers (option or list), and the
+   * record must contain field {@code f}. Throws {@link TypeException} with a
+   * positioned message otherwise.
+   */
+  private static void checkSafeNav(
+      Ast.Apply apply, Ast.RecordSelector recordSelector, TypeMap typeMap) {
+    final Type argType = typeMap.getType(apply.arg);
+    Type type = argType;
+    boolean tunneled = false;
+    for (Type element; (element = safeNavElement(type)) != null; ) {
+      type = element;
+      tunneled = true;
+    }
+    if (!tunneled) {
+      throw new TypeException(
+          "'?.' applied to non-functor type "
+              + argType
+              + " (expected option or list)",
+          apply.arg.pos);
+    }
+    if (type.op() != Op.RECORD_TYPE && type.op() != Op.TUPLE_TYPE) {
+      throw new TypeException(
+          "reference to field "
+              + recordSelector.name
+              + " of non-record type "
+              + type,
+          apply.arg.pos);
+    }
+    final RecordLikeType recordType = (RecordLikeType) type;
+    if (!recordType.argNameTypes().containsKey(recordSelector.name)) {
+      throw new TypeException(
+          "no field '" + recordSelector.name + "' in type '" + type + "'",
+          apply.fn.pos);
+    }
+  }
+
+  /**
+   * If {@code type} is a safe-navigation functor (option or list), returns its
+   * element type; otherwise returns null.
+   */
+  private static @Nullable Type safeNavElement(Type type) {
+    if (type instanceof ListType) {
+      return type.elementType();
+    }
+    if (type.op() == Op.DATA_TYPE
+        && isSafeNavFunctor(((DataType) type).name())) {
+      return ((DataType) type).arguments.get(0);
+    }
+    return null;
   }
 
   /**
@@ -700,6 +827,46 @@ public class TypeResolver {
     return deduceExpType(env, node, v);
   }
 
+  /**
+   * Checks that an {@code int} or {@code word} literal value fits its type,
+   * throwing a {@link TypeException} if not. {@code int} is signed 32-bit;
+   * {@code word} is unsigned 64-bit. {@code node} is an {@link Ast.Literal} or
+   * {@link Ast.LiteralPat}.
+   */
+  private static void checkLiteralRange(AstNode node, PrimitiveType type) {
+    final Comparable comparable =
+        node instanceof Ast.Literal
+            ? ((Ast.Literal) node).value
+            : ((Ast.LiteralPat) node).value;
+    final BigInteger i = ((BigDecimal) comparable).toBigInteger();
+    switch (type) {
+      case INT:
+        // 'int' is signed 32-bit; negatives are allowed and bitLength excludes
+        // the sign bit.
+        validateLiteralRange(type, i, true, 31, "" + i, node.pos);
+        return;
+      case WORD:
+        // 'word' is unsigned 64-bit; negatives are not allowed.
+        validateLiteralRange(type, i, false, 64, "0w" + i, node.pos);
+    }
+  }
+
+  private static void validateLiteralRange(
+      PrimitiveType type,
+      BigInteger i,
+      boolean signed,
+      int bits,
+      String text,
+      Pos pos) {
+    if (i.bitLength() > bits || !signed && i.signum() < 0) {
+      throw new TypeException(
+          format(
+              "literal '%s' is too large for type %s",
+              first(pos.text(), text), type),
+          pos);
+    }
+  }
+
   private Ast.Exp deduceExpType(TypeEnv env, Ast.Exp node, Variable v) {
     final List<Ast.Exp> args2;
     final Variable v2;
@@ -709,24 +876,22 @@ public class TypeResolver {
         return deduceExpType(env, ((Ast.AttributedExp) node).exp, v);
       case BOOL_LITERAL:
         return reg(node, v, toTerm(PrimitiveType.BOOL));
-
       case CHAR_LITERAL:
         return reg(node, v, toTerm(PrimitiveType.CHAR));
-
       case INT_LITERAL:
+        checkLiteralRange(node, PrimitiveType.INT);
         return reg(node, v, toTerm(PrimitiveType.INT));
-
       case INTERNAL_LITERAL:
         return reg(node, v, (Variable) ((Ast.Literal) node).value);
-
       case REAL_LITERAL:
         return reg(node, v, toTerm(PrimitiveType.REAL));
-
       case STRING_LITERAL:
         return reg(node, v, toTerm(PrimitiveType.STRING));
-
       case UNIT_LITERAL:
         return reg(node, v, toTerm(PrimitiveType.UNIT));
+      case WORD_LITERAL:
+        checkLiteralRange(node, PrimitiveType.WORD);
+        return reg(node, v, toTerm(PrimitiveType.WORD));
 
       case ANNOTATED_EXP:
         final Ast.AnnotatedExp annotatedExp = (Ast.AnnotatedExp) node;
@@ -1022,6 +1187,9 @@ public class TypeResolver {
     final Ast.Pat pat;
     switch (step.op) {
       case SCAN:
+      case LEFT_JOIN:
+      case RIGHT_JOIN:
+      case FULL_JOIN:
         return deduceScanStepType((Ast.Scan) step, p, fieldVars, steps);
 
       case WHERE:
@@ -1174,7 +1342,6 @@ public class TypeResolver {
         final Ast.Through through = (Ast.Through) step;
         final Variable v18 = unifier.variable();
         final Variable c18 = unifier.variable();
-        reg(through, c18);
 
         // Input collection (p.c) is either a bag of p.v or a list of p.v.
         mayBeBagOrList(requireNonNull(p.c), p.v);
@@ -1186,7 +1353,13 @@ public class TypeResolver {
         final Variable v17 = toVariable(fnTerm(p.c, c18));
         final Ast.Exp throughExp = deduceExpType(p.env, through.exp, v17);
         mayBeBagOrList(c18, v18);
-        steps.add(through.copy(pat, throughExp));
+        // Register the rewritten node (the one added to 'steps', which the
+        // resolver later looks up), not only the original: type resolution may
+        // have rewritten the expression (e.g. 'List.map ...'), giving a new
+        // node that would otherwise have no registered type.
+        final Ast.Through through2 = through.copy(pat, throughExp);
+        reg(through2, c18);
+        steps.add(through2);
         TypeEnv env5 = p.rootEnv;
         fieldVars.clear();
         for (PatTerm e : termMap) {
@@ -1212,6 +1385,18 @@ public class TypeResolver {
     final List<PatTerm> termMap = new ArrayList<>();
     final CollectionType containerize;
     requireNonNull(p.c);
+    // The source of a 'right join' or 'full join' may have rows that match no
+    // input row, so it must not depend on the query's input. We resolve it in
+    // the outer environment ('rootEnv'), so that a reference to an input
+    // variable fails to resolve, and we check explicitly for 'current' and
+    // 'ordinal' (which resolve via the step stack, not the environment).
+    final TypeEnv scanEnv;
+    if (scan.op.optionalizesLeft() && scan.exp != null) {
+      checkJoinSourceIndependent(scan.exp, fieldVars);
+      scanEnv = p.rootEnv;
+    } else {
+      scanEnv = p.env;
+    }
     if (scan.exp == null) {
       scanExp3 = null;
       // If we're iterating over 'all values' of the type, we'd better not
@@ -1220,17 +1405,20 @@ public class TypeResolver {
       c0 = null;
     } else if (scan.exp.op == Op.FROM_EQ) {
       final Ast.Exp scanExp = ((Ast.PrefixCall) scan.exp).a;
-      final Ast.Exp scanExp2 = deduceExpType(p.env, scanExp, v0);
+      final Ast.Exp scanExp2 = deduceExpType(scanEnv, scanExp, v0);
       scanExp3 = ast.fromEq(scanExp2);
       containerize = CollectionType.INHERIT; // retain source collection type
       c0 = null;
       reg(scanExp, v0);
     } else {
       c0 = unifier.variable();
-      scanExp3 = deduceExpType(p.env, scan.exp, c0);
+      scanExp3 = deduceExpType(scanEnv, scan.exp, c0);
       reg(scan.exp, c0);
       containerize = CollectionType.BOTH; // retain source collection type
     }
+    // Fields bound by earlier steps; if this is a 'right join' or 'full join'
+    // they become optional downstream.
+    final int priorCount = fieldVars.size();
     pat = deducePatType(p.env, scan.pat, termMap::add, null, v0, t -> t);
     final TypeEnvHolder typeEnvs = new TypeEnvHolder(p.env);
     for (PatTerm patTerm : termMap) {
@@ -1239,7 +1427,40 @@ public class TypeResolver {
       fieldVars.add(id1, (Variable) patTerm.term);
       reg(id1, patTerm.term);
     }
+    // The 'on' clause sees the non-optional ('unwrapped') types, so resolve it
+    // before wrapping any fields in 'option' below.
     final TypeEnv env4 = typeEnvs.typeEnv;
+    final Ast.Exp scanCondition2;
+    if (scan.condition != null) {
+      final Variable v5 = unifier.variable();
+      scanCondition2 = deduceExpType(env4, scan.condition, v5);
+      equiv(v5, toTerm(PrimitiveType.BOOL));
+    } else {
+      scanCondition2 = null;
+    }
+
+    // An outer join makes the fields on one or both sides optional, so that an
+    // absent row can be represented as 'NONE'. A 'left'/'full' join wraps the
+    // newly scanned fields; a 'right'/'full' join wraps the fields of earlier
+    // steps. Wrapping is additive, so nested outer joins stack 'option' layers
+    // (e.g. 'option option'). Only the downstream environment ('outEnv') and
+    // element type ('v') are affected, not the 'on' clause resolved above.
+    TypeEnv outEnv = env4;
+    if (scan.op.optionalizesLeft() || scan.op.optionalizesRight()) {
+      for (int i = 0; i < fieldVars.size(); i++) {
+        final boolean wrap =
+            i < priorCount
+                ? scan.op.optionalizesLeft()
+                : scan.op.optionalizesRight();
+        if (wrap) {
+          final Ast.Id id = fieldVars.left(i);
+          final Variable wrapped =
+              equiv(unifier.variable(), optionTerm(fieldVars.right(i)));
+          fieldVars.set(i, id, wrapped);
+          outEnv = outEnv.bind(id.name, wrapped);
+        }
+      }
+    }
 
     final Variable v = fieldVar(fieldVars, true);
     final Variable c;
@@ -1296,16 +1517,156 @@ public class TypeResolver {
         }
     }
 
-    final Ast.Exp scanCondition2;
-    if (scan.condition != null) {
-      final Variable v5 = unifier.variable();
-      scanCondition2 = deduceExpType(env4, scan.condition, v5);
-      equiv(v5, toTerm(PrimitiveType.BOOL));
-    } else {
-      scanCondition2 = null;
-    }
     steps.add(scan.copy(pat, scanExp3, scanCondition2));
-    return Triple.of(p.rootEnv, env4, v, c);
+    return Triple.of(p.rootEnv, outEnv, v, c);
+  }
+
+  /**
+   * Checks that the source expression of a 'right join' or 'full join' does not
+   * depend on the query's input. Such a source may have rows that match no
+   * input row, so it may not reference the variables of earlier steps, nor
+   * 'current' or 'ordinal'.
+   *
+   * <p>This catches the obvious cases with a clear message; references to input
+   * variables that are missed here (e.g. inside a nested query) still fail
+   * because the source is type-resolved in the outer environment.
+   */
+  private void checkJoinSourceIndependent(
+      Ast.Exp exp, PairList<Ast.Id, Variable> inputVars) {
+    final Set<String> inputNames = new HashSet<>();
+    inputVars.forEach((id, v) -> inputNames.add(id.name));
+    exp.accept(
+        new Visitor() {
+          /** Names bound by an enclosing 'let', 'fn' or 'case'. */
+          final Set<String> shadowed = new HashSet<>();
+
+          /**
+           * Nesting depth of enclosing queries; 'current' and 'ordinal' refer
+           * to the input only at depth 0.
+           */
+          int queryDepth = 0;
+
+          @Override
+          protected void visit(Ast.Id id) {
+            if (queryDepth == 0
+                && inputNames.contains(id.name)
+                && !shadowed.contains(id.name)) {
+              throw referenceError(id.name, id.pos);
+            }
+          }
+
+          @Override
+          protected void visit(Ast.Current current) {
+            if (queryDepth == 0) {
+              throw referenceError("current", current.pos);
+            }
+          }
+
+          @Override
+          protected void visit(Ast.Ordinal ordinal) {
+            if (queryDepth == 0) {
+              throw referenceError("ordinal", ordinal.pos);
+            }
+          }
+
+          @Override
+          protected void visit(Ast.From from) {
+            nested(from.steps);
+          }
+
+          @Override
+          protected void visit(Ast.Exists exists) {
+            nested(exists.steps);
+          }
+
+          @Override
+          protected void visit(Ast.Forall forall) {
+            nested(forall.steps);
+          }
+
+          private void nested(List<Ast.FromStep> steps) {
+            ++queryDepth;
+            steps.forEach(this::accept);
+            --queryDepth;
+          }
+
+          @Override
+          protected void visit(Ast.Let let) {
+            final Set<String> added = addShadow(declNames(let.decls));
+            super.visit(let);
+            shadowed.removeAll(added);
+          }
+
+          @Override
+          protected void visit(Ast.Fn fn) {
+            fn.matchList.forEach(this::matchScope);
+          }
+
+          @Override
+          protected void visit(Ast.Case kase) {
+            kase.exp.accept(this);
+            kase.matchList.forEach(this::matchScope);
+          }
+
+          private void matchScope(Ast.Match match) {
+            final Set<String> added = addShadow(patNames(match.pat));
+            match.exp.accept(this);
+            shadowed.removeAll(added);
+          }
+
+          /**
+           * Adds names to {@link #shadowed} and returns those that were not
+           * already present (so the caller can remove exactly those).
+           */
+          private Set<String> addShadow(Set<String> names) {
+            names.removeAll(shadowed);
+            shadowed.addAll(names);
+            return names;
+          }
+
+          private RuntimeException referenceError(String name, Pos pos) {
+            return new CompileException(
+                format(
+                    "join source must not reference '%s' "
+                        + "(right and full joins must be independent)",
+                    name),
+                false,
+                pos);
+          }
+        });
+  }
+
+  private static Set<String> patNames(Ast.Pat pat) {
+    final Set<String> set = new HashSet<>();
+    addPatNames(pat, set);
+    return set;
+  }
+
+  private static void addPatNames(Ast.Pat pat, Set<String> set) {
+    if (pat instanceof Ast.IdPat) {
+      set.add(((Ast.IdPat) pat).name);
+    } else if (pat instanceof Ast.AsPat) {
+      set.add(((Ast.AsPat) pat).id.name);
+    }
+    pat.forEachArg((subPat, i) -> addPatNames(subPat, set));
+  }
+
+  private static Set<String> declNames(List<Ast.Decl> decls) {
+    final Set<String> set = new HashSet<>();
+    for (Ast.Decl decl : decls) {
+      if (decl instanceof Ast.ValDecl) {
+        for (Ast.ValBind valBind : ((Ast.ValDecl) decl).valBinds) {
+          addPatNames(valBind.pat, set);
+        }
+      } else if (decl instanceof Ast.FunDecl) {
+        for (Ast.FunBind funBind : ((Ast.FunDecl) decl).funBinds) {
+          for (Ast.FunMatch funMatch : funBind.matchList) {
+            set.add(funMatch.name);
+          }
+        }
+      }
+    }
+    return set;
   }
 
   private Sequence argTerm(Term... args) {
@@ -1418,7 +1779,6 @@ public class TypeResolver {
           fieldVars.add(id, v7);
           groupExps.add(id, exp2);
         });
-    bindings.add(BuiltIn.Z_ELEMENTS.mlName, requireNonNull(p.c));
 
     final Ast.Record compute = group.compute();
     final PairList<Ast.Id, Ast.Exp> args2;
@@ -1460,14 +1820,26 @@ public class TypeResolver {
       PairList<Ast.Id, Variable> fieldVars,
       PairList<String, Term> bindings) {
     final PairList<Ast.Id, Ast.Exp> args2 = PairList.of();
-    final TypeEnv groupEnv = p.rootEnv.bindAll(bindings);
+    // 'elements' is in scope only within the 'compute' clause; bind it in the
+    // local environments here rather than in 'bindings', so that it does not
+    // leak into the step's output environment (which would let 'elements' be
+    // referenced, and crash, in a following step such as 'yield').
+    final Term elementsTerm = requireNonNull(p.c);
+    final TypeEnv groupEnv =
+        p.rootEnv
+            .bindAll(bindings)
+            .bind(BuiltIn.Z_ELEMENTS.mlName, elementsTerm);
     compute.args.forEach(
         (id, exp) -> {
           final Variable v8 = unifier.variable();
           reg(id, v8);
           final Ast.Exp exp2;
           final AggFrame aggFrame =
-              new AggFrame(p.withEnv(p.env.bindAll(bindings)));
+              new AggFrame(
+                  p.withEnv(
+                      p.env
+                          .bindAll(bindings)
+                          .bind(BuiltIn.Z_ELEMENTS.mlName, elementsTerm)));
           try {
             aggregateTripleStack.push(aggFrame);
             exp2 = deduceExpType(groupEnv, exp, v8);
@@ -1882,9 +2254,10 @@ public class TypeResolver {
    * postfix dispatch.
    */
   private static Ast.Exp postfixBuiltInFnExp(Pos pos, BuiltIn builtIn) {
-    if (builtIn.alias != null) {
-      return ast.id(pos, builtIn.alias);
-    } else if (builtIn.structure != null && !builtIn.structure.equals("$")) {
+    if (!builtIn.aliases().isEmpty()) {
+      return ast.id(pos, builtIn.aliases().get(0));
+    } else if (!builtIn.structure.equals("Top")
+        && !builtIn.structure.equals("$")) {
       return ast.apply(
           ast.recordSelector(pos, builtIn.mlName),
           ast.id(pos, builtIn.structure));
@@ -2418,6 +2791,8 @@ public class TypeResolver {
         return PrimitiveType.STRING;
       case UNIT_LITERAL:
         return PrimitiveType.UNIT;
+      case WORD_LITERAL:
+        return PrimitiveType.WORD;
       case ID:
         final Ast.Id id = (Ast.Id) exp;
         Type type = env.getTypeOpt(id.name);
@@ -2447,29 +2822,120 @@ public class TypeResolver {
       Variable vArg,
       Variable vResult) {
     final String fieldName = recordSelector.name;
-    actionMap.put(
-        vArg,
-        (v, t, substitution, termPairs) -> {
-          // We now know "vArg", the argument type, and so we can deduce
-          // "vResult", the result type.
-          //
-          // Suppose it is "{a: int, b: real}", and "recordSelector" is "#b".
-          // From this, we can declare that the result type is "real".
-          if (t instanceof Sequence) {
-            final Sequence sequence = (Sequence) t;
-            final List<String> fieldList = fieldList(sequence);
-            if (fieldList != null) {
-              int i = fieldList.indexOf(fieldName);
-              if (i >= 0) {
-                final Term result2 = substitution.resolve(vResult);
-                final Term term = sequence.terms.get(i);
-                final Term term2 = substitution.resolve(term);
-                termPairs.accept(result2, term2);
-              }
+    if (recordSelector.safe) {
+      // Safe navigation "e?.f": the receiver "e" is a record wrapped in one or
+      // more functor layers (option, list). Tunnel through all the layers to
+      // the record, project "f", and re-wrap the field type in the same layers.
+      // The field's own type is preserved: if "e" has type "{f:int option}
+      // option" then "e?.f" has type "int option option".
+      actionMap.put(
+          vArg,
+          (v, t, substitution, termPairs) ->
+              resolveSafeField(
+                  ImmutableList.of(),
+                  fieldName,
+                  t,
+                  vResult,
+                  substitution,
+                  termPairs));
+    } else {
+      // Plain "#f e": when we resolve "vArg" (the argument type) to a record
+      // "{a: int, b: real}" and "f" is "b", we can declare "vResult" to be
+      // "real".
+      actionMap.put(
+          vArg,
+          (v, t, substitution, termPairs) -> {
+            final Term fieldType = lookupField(t, fieldName, substitution);
+            if (fieldType != null) {
+              termPairs.accept(substitution.resolve(vResult), fieldType);
             }
-          }
-        });
+          });
+    }
     return recordSelector;
+  }
+
+  /**
+   * Tunnels through the functor layers of a safe-navigation receiver to the
+   * record, projects {@code fieldName}, and binds {@code vResult} to the field
+   * type re-wrapped in those layers. {@code functors} is the stack of layers
+   * peeled so far (outermost first). Defers if a layer is not yet resolved.
+   */
+  private void resolveSafeField(
+      List<String> functors,
+      String fieldName,
+      Term term,
+      Variable vResult,
+      Unifier.Substitution substitution,
+      BiConsumer<Term, Term> termPairs) {
+    final Term t = substitution.resolve(term);
+    if (t instanceof Variable) {
+      // A layer (or the record) is not yet resolved; defer until it is.
+      actionMap.put(
+          (Variable) t,
+          (v, t2, sub, tp) ->
+              resolveSafeField(functors, fieldName, t2, vResult, sub, tp));
+      return;
+    }
+    if (!(t instanceof Sequence)) {
+      return; // not a record or functor; reported by the post-pass
+    }
+    final Sequence seq = (Sequence) t;
+    if (isSafeNavFunctor(seq.operator) && seq.terms.size() == 1) {
+      // Tunnel through this functor layer.
+      resolveSafeField(
+          ImmutableList.<String>builder()
+              .addAll(functors)
+              .add(seq.operator)
+              .build(),
+          fieldName,
+          seq.terms.get(0),
+          vResult,
+          substitution,
+          termPairs);
+      return;
+    }
+    // Reached a non-functor type; it must be a record with field "f".
+    final Term fieldType = lookupField(seq, fieldName, substitution);
+    if (fieldType == null) {
+      return; // not a record, or no such field; reported by the post-pass
+    }
+    // Re-wrap the field type in the functor layers (innermost layer first).
+    Term result = fieldType;
+    for (int i = functors.size() - 1; i >= 0; i--) {
+      result = unifier.apply(functors.get(i), result);
+    }
+    termPairs.accept(substitution.resolve(vResult), result);
+  }
+
+  /**
+   * Whether {@code op} is a functor type-constructor through which safe
+   * navigation {@code ?.} projects fields.
+   */
+  private static boolean isSafeNavFunctor(String op) {
+    return op.equals("option")
+        || op.equals("vector")
+        || op.equals(LIST_TY_CON)
+        || op.equals(BAG_TY_CON);
+  }
+
+  /**
+   * Looks up field {@code fieldName} in record term {@code t}, returning the
+   * resolved field-type term, or null if {@code t} is not a record or has no
+   * such field.
+   */
+  private static @Nullable Term lookupField(
+      Term t, String fieldName, Unifier.Substitution substitution) {
+    if (t instanceof Sequence) {
+      final Sequence sequence = (Sequence) t;
+      final List<String> fieldList = fieldList(sequence);
+      if (fieldList != null) {
+        final int i = fieldList.indexOf(fieldName);
+        if (i >= 0) {
+          return substitution.resolve(sequence.terms.get(i));
+        }
+      }
+    }
+    return null;
   }
 
   /** Inverse of {@link #recordLabel(NavigableSet)}. */
@@ -2720,6 +3186,8 @@ public class TypeResolver {
       // Check that every type-constructor reference in the body has the right
       // number of arguments before we materialize the key.
       checkTypeConstructorArities(typeSystem, bind.type);
+      // The body may not use a type variable that is not in the head.
+      checkBoundTyVars(bind.tyVars, ImmutableList.of(bind.type));
       final KeyBuilder keyBuilder = new KeyBuilder();
       bind.tyVars.forEach(keyBuilder::toTypeKey);
 
@@ -2727,7 +3195,7 @@ public class TypeResolver {
           Keys.alias(
               bind.name.name,
               keyBuilder.toTypeKey(bind.type),
-              ImmutableList.of()));
+              Keys.ordinals(bind.tyVars.size())));
     }
     final List<Type> types = typeSystem.typesFor(keys);
 
@@ -2741,6 +3209,16 @@ public class TypeResolver {
       PairList<Ast.IdPat, Term> termMap) {
     final List<Keys.DataTypeKey> keys = new ArrayList<>();
     for (Ast.DatatypeBind bind : datatypeDecl.binds) {
+      // A constructor's argument type may not use a type variable that is not
+      // in the head.
+      final List<Ast.Type> bodyTypes = new ArrayList<>();
+      for (Ast.TyCon tyCon : bind.tyCons) {
+        if (tyCon.type != null) {
+          bodyTypes.add(tyCon.type);
+        }
+      }
+      checkBoundTyVars(bind.tyVars, bodyTypes);
+
       final KeyBuilder keyBuilder = new KeyBuilder();
       bind.tyVars.forEach(keyBuilder::toTypeKey);
 
@@ -2780,6 +3258,36 @@ public class TypeResolver {
 
     map.put(datatypeDecl, toTerm(PrimitiveType.UNIT));
     return datatypeDecl;
+  }
+
+  /**
+   * Checks that every type variable used in the body of a {@code type} or
+   * {@code datatype} declaration is one of the type variables in the head.
+   *
+   * <p>For example, {@code datatype my_option = MY_NONE | MY_SOME of 'a} is
+   * invalid because {@code 'a} is not declared in the head; you must write
+   * {@code datatype 'a my_option = MY_NONE | MY_SOME of 'a}.
+   *
+   * @throws CompileException if {@code bodies} use a type variable that is not
+   *     in {@code tyVars}
+   */
+  private static void checkBoundTyVars(
+      List<Ast.TyVar> tyVars, Iterable<Ast.Type> bodies) {
+    final Set<String> bound = new HashSet<>();
+    tyVars.forEach(tyVar -> bound.add(tyVar.name));
+    final Visitor visitor =
+        new Visitor() {
+          @Override
+          protected void visit(Ast.TyVar tyVar) {
+            if (!bound.contains(tyVar.name)) {
+              throw new CompileException(
+                  "unbound type variable in type declaration: " + tyVar.name,
+                  false,
+                  tyVar.pos);
+            }
+          }
+        };
+    bodies.forEach(body -> body.accept(visitor));
   }
 
   private Ast.Decl deduceOverDeclType(
@@ -2979,8 +3487,21 @@ public class TypeResolver {
           final Type aliasType = typeSystem.lookupOpt(namedType.name);
           checkTypeConstructorArity(namedType, aliasType);
           if (aliasType instanceof AliasType) {
-            final Term aliasTerm = toTerm(aliasType, Subst.EMPTY);
-            return reg(type, v, aliasTerm);
+            // An alias is a type function: substitute the use-site arguments
+            // for the head type variables, then expand the body. For example,
+            // given 'type 'a my_list = 'a list', 'int my_list' expands to
+            // 'int list'.
+            final AliasType alias = (AliasType) aliasType;
+            final PairList<Ast.Type, Variable> argTerms =
+                typeTerms(namedType.types);
+            Subst subst = Subst.EMPTY;
+            for (int i = 0; i < alias.parameterTypes.size(); i++) {
+              subst =
+                  subst.plus(
+                      (TypeVar) alias.parameterTypes.get(i), argTerms.right(i));
+            }
+            final Term aliasTerm = toTerm(alias.type, subst);
+            return reg(namedType.copy(argTerms.leftList()), v, aliasTerm);
           }
 
           final PairList<Ast.Type, Variable> typeTerms2 =
@@ -3129,7 +3650,7 @@ public class TypeResolver {
           prevReturnTypePos = funMatch.pos;
         }
       }
-      exp = ast.caseOf(Pos.ZERO, idTuple(varNames), matchList);
+      exp = ast.caseOf(Pos.sum(matchList), idTuple(varNames), matchList);
     }
     if (returnType != null) {
       exp = ast.annotatedExp(exp.pos, exp, returnType);
@@ -3226,6 +3747,7 @@ public class TypeResolver {
         return reg(pat, v, toTerm(PrimitiveType.CHAR));
 
       case INT_LITERAL_PAT:
+        checkLiteralRange(pat, PrimitiveType.INT);
         return reg(pat, v, toTerm(PrimitiveType.INT));
 
       case REAL_LITERAL_PAT:
@@ -3233,6 +3755,10 @@ public class TypeResolver {
 
       case STRING_LITERAL_PAT:
         return reg(pat, v, toTerm(PrimitiveType.STRING));
+
+      case WORD_LITERAL_PAT:
+        checkLiteralRange(pat, PrimitiveType.WORD);
+        return reg(pat, v, toTerm(PrimitiveType.WORD));
 
       case ID_PAT:
         final Ast.IdPat idPat = (Ast.IdPat) pat;
@@ -3423,8 +3949,8 @@ public class TypeResolver {
         && call.a1 instanceof Ast.RangeList) {
       return elemOnRangeList(env, call, v);
     }
-    Ast.Id id = ast.id(Pos.ZERO, requireNonNull(call.op.opName));
-    Ast.Tuple arg = ast.tuple(Pos.ZERO, ImmutableList.of(call.a0, call.a1));
+    Ast.Id id = ast.id(call.pos, requireNonNull(call.op.opName));
+    Ast.Tuple arg = ast.tuple(call.pos, ImmutableList.of(call.a0, call.a1));
     return deduceExpType(env, ast.apply(id, arg), v);
   }
 
@@ -3460,7 +3986,7 @@ public class TypeResolver {
 
   /** Registers a prefix operator. */
   private Ast.Exp prefix(TypeEnv env, Ast.PrefixCall call, Variable v) {
-    Ast.Id id = ast.id(Pos.ZERO, requireNonNull(call.op.opName));
+    Ast.Id id = ast.id(call.pos, requireNonNull(call.op.opName));
     return deduceExpType(env, ast.apply(id, call.a), v);
   }
 
@@ -3486,6 +4012,10 @@ public class TypeResolver {
 
   private Sequence bagTerm(Term term) {
     return unifier.apply(BAG_TY_CON, term);
+  }
+
+  private Sequence optionTerm(Term term) {
+    return unifier.apply(OPTION_TY_CON, term);
   }
 
   private Sequence fnTerm(Term arg, Term result) {

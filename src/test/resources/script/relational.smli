@@ -169,12 +169,77 @@ from p in [{x = 1, y = 2},{x = 3, y = 5}]
   yield case p of {x, y} => (x, y);
 > val it = [(1,2),(3,5)] : (int * int) list
 
-(* Correlated (lateral) scan: a 'from' subquery on the right of a comma-join
- * that references an outer variable. *)
+(* Dependent join ------------------------------------------------- *)
+
+(* A dependent join (also known as a lateral join, or a correlated subquery)
+ * is a 'from' subquery on the right of a comma-join that references an outer
+ * variable. *)
 from e in [1, 2, 3],
     v in (from i in [1, 2] yield e * i)
   yield v;
 > val it = [1,2,2,4,3,6] : int list
+
+(* A correlated subquery whose 'take' or 'skip' count references the outer
+ * row. The subquery must be evaluated once per outer row; it is not valid to
+ * merge a 'take' or 'skip' into the enclosing join (those steps do not
+ * distribute over the outer loop). *)
+from i in [1, 2, 3, 4, 5],
+    j in (from j in ["a", "b", "c"] take i);
+> val it =
+>   [{i=1,j="a"},{i=2,j="a"},{i=2,j="b"},{i=3,j="a"},{i=3,j="b"},{i=3,j="c"},
+>    {i=4,j="a"},{i=4,j="b"},{i=4,j="c"},{i=5,j="a"},{i=5,j="b"},{i=5,j="c"}]
+>   : {i:int, j:string} list
+from i in [1, 2, 3],
+    j in (from j in ["a", "b", "c"] skip i);
+> val it = [{i=1,j="b"},{i=1,j="c"},{i=2,j="c"}] : {i:int, j:string} list
+
+(* A non-correlated 'take' subquery must also stay local to the subquery:
+ * each outer row is paired with the first two inner rows, not just two rows
+ * overall. *)
+from i in [1, 2],
+    j in (from k in [10, 20, 30] take 2);
+> val it = [{i=1,j=10},{i=1,j=20},{i=2,j=10},{i=2,j=20}] : {i:int, j:int} list
+
+(* 'order' then 'take' in a correlated subquery: the top 'i' values per outer
+ * row. *)
+from i in [1, 2, 3],
+    j in (from k in [30, 10, 20] order DESC k take i);
+> val it = [{i=1,j=30},{i=2,j=30},{i=2,j=20},{i=3,j=30},{i=3,j=20},{i=3,j=10}]
+>   : {i:int, j:int} list
+
+(*) 'skip' then 'take' in a correlated subquery.
+from i in [0, 1, 2],
+    j in (from k in ["a", "b", "c", "d"] skip i take 1);
+> val it = [{i=0,j="a"},{i=1,j="b"},{i=2,j="c"}] : {i:int, j:string} list
+
+(*) 'take' then 'where' in a correlated subquery.
+from i in [1, 2, 3, 4],
+    j in (from k in [10, 20, 30, 40, 50] take i where k > 15);
+> val it = [{i=2,j=20},{i=3,j=20},{i=3,j=30},{i=4,j=20},{i=4,j=30},{i=4,j=40}]
+>   : {i:int, j:int} list
+
+(*) 'order', 'take' and 'where' combined in a correlated subquery.
+from i in [1, 2, 3],
+    j in (from k in [5, 1, 4, 2, 3] order DESC k take i where k mod 2 = 1);
+> val it = [{i=1,j=5},{i=2,j=5},{i=3,j=5},{i=3,j=3}] : {i:int, j:int} list
+
+(* 'group' in a correlated subquery: count how many inner rows match the
+ * outer row. *)
+from i in [2, 3],
+    x in (from k in [1, 2, 3, 4, 5, 6]
+        where k mod i = 0
+        group {} compute {c = count over ()});
+> val it = [{i=2,x={c=3}},{i=3,x={c=2}}] : {i:int, x:{c:int}} list
+
+(* 'group' with a key that depends on the outer row, producing several groups
+ * per outer row. *)
+from i in [1, 2],
+    x in (from k in [1, 2, 3, 4, 5, 6]
+        group {g = k mod (i + 1)} compute {c = count over ()}
+        order g);
+> val it =
+>   [{i=1,x={c=3,g=0}},{i=1,x={c=3,g=1}},{i=2,x={c=2,g=0}},{i=2,x={c=2,g=1}},
+>    {i=2,x={c=2,g=2}}] : {i:int, x:{c:int, g:int}} list
 
 from e in emps
   yield {x = e.id + e.deptno, y = e.id - e.deptno}
@@ -246,8 +311,8 @@ from e in [1, 2, 3]
  * error. (This is the standard type-conflict error; 'yieldAll' adds
  * no synthesized scan or yield to the message.) *)
 from i in [1, 2] yieldAll i > 1;
-> 0.0-0.0 Error: Cannot deduce type: no valid overloads
->   raised at: 0.0-0.0
+> stdIn:1.1-1.32 Error: Cannot deduce type: no valid overloads
+>   raised at: stdIn:1.1-1.32
 
 (* A 'yieldAll' expression that references an unbound variable is an
  * error, reported at the offending reference. *)
@@ -516,25 +581,27 @@ from e in emps
   order e.deptno
   yield {ordinal, e.name};
 > val it =
->   [{name="Fred",ordinal=0},{name="Velma",ordinal=1},{name="Shaggy",ordinal=2},
->    {name="Scooby",ordinal=3}] : {name:string, ordinal:int} list
+>   [{name="Fred",`ordinal`=0},{name="Velma",`ordinal`=1},
+>    {name="Shaggy",`ordinal`=2},{name="Scooby",`ordinal`=3}]
+>   : {name:string, `ordinal`:int} list
 
 from e in emps
   order e.deptno
   where e.deptno = 30
   yield {ordinal, e.name};
-> val it = [{name="Shaggy",ordinal=0},{name="Scooby",ordinal=1}]
->   : {name:string, ordinal:int} list
+> val it = [{name="Shaggy",`ordinal`=0},{name="Scooby",`ordinal`=1}]
+>   : {name:string, `ordinal`:int} list
 
 from e in emps
   order e.deptno
   join i in [2,3]
   yield {ordinal, e.name};
 > val it =
->   [{name="Fred",ordinal=0},{name="Fred",ordinal=1},{name="Velma",ordinal=2},
->    {name="Velma",ordinal=3},{name="Shaggy",ordinal=4},
->    {name="Shaggy",ordinal=5},{name="Scooby",ordinal=6},
->    {name="Scooby",ordinal=7}] : {name:string, ordinal:int} list
+>   [{name="Fred",`ordinal`=0},{name="Fred",`ordinal`=1},
+>    {name="Velma",`ordinal`=2},{name="Velma",`ordinal`=3},
+>    {name="Shaggy",`ordinal`=4},{name="Shaggy",`ordinal`=5},
+>    {name="Scooby",`ordinal`=6},{name="Scooby",`ordinal`=7}]
+>   : {name:string, `ordinal`:int} list
 
 (*) 'ordinal' cannot be used in an unordered query
 from e in emps, i in bag [1]
@@ -546,8 +613,9 @@ from e in emps, i in bag [1]
   order e.deptno
   yield {ordinal, e.name};
 > val it =
->   [{name="Fred",ordinal=0},{name="Velma",ordinal=1},{name="Shaggy",ordinal=2},
->    {name="Scooby",ordinal=3}] : {name:string, ordinal:int} list
+>   [{name="Fred",`ordinal`=0},{name="Velma",`ordinal`=1},
+>    {name="Shaggy",`ordinal`=2},{name="Scooby",`ordinal`=3}]
+>   : {name:string, `ordinal`:int} list
 
 (*) A 'where' clause after 'yield ordinal' creates gaps in the ordinals.
 from e in emps
@@ -556,9 +624,9 @@ from e in emps
   yield {ordinal, e.name}
   where String.sub(name, 0) = #"S";
 > val it =
->   [{name="Shaggy",ordinal=4},{name="Shaggy",ordinal=5},
->    {name="Scooby",ordinal=6},{name="Scooby",ordinal=7}]
->   : {name:string, ordinal:int} list
+>   [{name="Shaggy",`ordinal`=4},{name="Shaggy",`ordinal`=5},
+>    {name="Scooby",`ordinal`=6},{name="Scooby",`ordinal`=7}]
+>   : {name:string, `ordinal`:int} list
 
 (*) Do the equivalent of 'take' using ordinal.
 from e in emps
@@ -579,14 +647,14 @@ from i in [3,1,4,5,3,5,8,9,7]
   yield {ordinal, i}
   where i > 5
   where ordinal > 1;
-> val it = [{i=7,ordinal=8}] : {i:int, ordinal:int} list
+> val it = [{i=7,`ordinal`=8}] : {i:int, `ordinal`:int} list
 
 from i in [3,1,4,5,3,5,8,9,7]
   yield {ordinal, i}
   where i > 5
   where `ordinal` > 1;
-> val it = [{i=8,ordinal=6},{i=9,ordinal=7},{i=7,ordinal=8}]
->   : {i:int, ordinal:int} list
+> val it = [{i=8,`ordinal`=6},{i=9,`ordinal`=7},{i=7,`ordinal`=8}]
+>   : {i:int, `ordinal`:int} list
 
 from e in scott.emps
   yield {e.ename, e.sal, rank = ordinal + 1};
@@ -651,6 +719,87 @@ from i in [1,2]
   join j in (from k in ["a","b","c"] yield {m = ordinal} yield m);
 > val it = [{i=1,j=0},{i=1,j=1},{i=1,j=2},{i=2,j=0},{i=2,j=1},{i=2,j=2}]
 >   : {i:int, j:int} list
+
+(* Outer joins ---------------------------------------------------- *)
+
+(* The source of a 'right join' or 'full join' generates null rows on its
+ * left, so it must not depend on the query's input. The error's span is the
+ * offending reference. *)
+from r in orders right join i in r.items;
+> stdIn:1.34 Error: join source must not reference 'r' (right and full joins must be independent)
+>   raised at: stdIn:1.34
+
+(*) It may not reference an input variable directly, ...
+from i in [1, 2] right join j in [i] on true;
+> stdIn:1.35 Error: join source must not reference 'i' (right and full joins must be independent)
+>   raised at: stdIn:1.35
+
+(*) ... nor a variable bound by an earlier join, ...
+from i in [1, 2] join k in [3] right join j in [k] on true;
+> stdIn:1.49 Error: join source must not reference 'k' (right and full joins must be independent)
+>   raised at: stdIn:1.49
+
+(*) ... nor 'current', ...
+from i in [1, 2] right join j in [current] on true;
+> stdIn:1.35-1.42 Error: join source must not reference 'current' (right and full joins must be independent)
+>   raised at: stdIn:1.35-1.42
+
+(*) ... nor 'ordinal'.
+from i in [1, 2] right join j in [ordinal] on true;
+> stdIn:1.35-1.42 Error: join source must not reference 'ordinal' (right and full joins must be independent)
+>   raised at: stdIn:1.35-1.42
+
+(*) 'full join' has the same restriction.
+from i in [1, 2] full join j in [i] on true;
+> stdIn:1.34 Error: join source must not reference 'i' (right and full joins must be independent)
+>   raised at: stdIn:1.34
+
+(* A 'left join' wraps the right fields in 'option'; an input ('left') row
+ * with no matching right row is emitted with 'NONE'. *)
+from i in [1, 2, 3] left join j in [1, 2] on i = j;
+> val it = [{i=1,j=SOME 1},{i=2,j=SOME 2},{i=3,j=NONE}]
+>   : {i:int, j:int option} list
+
+(*) Every input row matches at least once.
+from i in [1, 2] left join j in [1, 2] on i = j;
+> val it = [{i=1,j=SOME 1},{i=2,j=SOME 2}] : {i:int, j:int option} list
+
+(*) The source of a 'left join' may be correlated with the input.
+from r in orders
+  left join i in r.items on i.units > 2;
+> val it =
+>   [{i=SOME {product="soda",units=3},
+>     r={id=1,items=[{product="beer",units=1},{product="soda",units=3}]}},
+>    {i=SOME {product="milk",units=5},
+>     r={id=2,items=[{product="milk",units=5},{product="beer",units=2}]}},
+>    {i=NONE,
+>     r={id=3,items=[{product="soda",units=1},{product="beer",units=1}]}}]
+>   : {i:{product:string, units:int} option,
+>       r:{id:int, items:{product:string, units:int} list}} list
+
+(* A 'right join' wraps the input ('left') fields in 'option'. A source row
+ * matching no input row is emitted with 'NONE' for the input fields; an input
+ * row matching no source row is dropped. *)
+from i in [1, 2, 3] right join j in [2, 4] on i = j;
+> val it = [{i=SOME 2,j=2},{i=NONE,j=4}] : {i:int option, j:int} list
+
+(* A 'full join' keeps unmatched rows from both sides. *)
+from i in [1, 3] full join j in [3, 5] on i = j;
+> val it = [{i=SOME 1,j=NONE},{i=SOME 3,j=SOME 3},{i=NONE,j=SOME 5}]
+>   : {i:int option, j:int option} list
+
+(* Order is preserved: matched rows come first (in input order), then the
+ * unmatched source rows in source order (5 before 4), not sorted by key. *)
+from i in [3, 1] right join j in [5, 3, 1, 4] on i = j;
+> val it = [{i=SOME 3,j=3},{i=SOME 1,j=1},{i=NONE,j=5},{i=NONE,j=4}]
+>   : {i:int option, j:int} list
+
+(* The same holds for a non-equi condition (whose evaluation might use a
+ * different data structure to match rows). The unmatched source rows 2 and 1
+ * are emitted in source order, not sorted. *)
+from i in [3] right join j in [5, 2, 8, 1] on i < j;
+> val it = [{i=SOME 3,j=5},{i=SOME 3,j=8},{i=NONE,j=2},{i=NONE,j=1}]
+>   : {i:int option, j:int} list
 
 (* Degenerate joins ----------------------------------------------- *)
 
@@ -879,6 +1028,12 @@ from i in [1, 2, 3],
   distinct;
 > val it = [2,3,4,5,6] : int list
 
+(* 'distinct' preserves arrival order: each value appears in the position
+   of its first occurrence, not in sorted order. *)
+from i in [3, 1, 2, 1, 3]
+  distinct;
+> val it = [3,1,2] : int list
+
 (*) 'distinct' applied to zero-field relation is non-empty
 from u in [(), (), ()]
   distinct;
@@ -1022,14 +1177,14 @@ from i in [2, 1, 2]
 > val it = {s=5,t=16} : {s:int, t:int}
 from i in [2, 1, 2]
   group i compute (sum over i);
-> val it = [{i=1,sum=1},{i=2,sum=4}] : {i:int, sum:int} list
+> val it = [{i=2,sum=4},{i=1,sum=1}] : {i:int, sum:int} list
 (*) Aggregate used in a subquery
 from i in [2, 1, 2]
   group i compute {x = from j in [3, 4] yield j + (sum over i)};
-> val it = [{i=1,x=[4,5]},{i=2,x=[7,8]}] : {i:int, x:int list} list
+> val it = [{i=2,x=[7,8]},{i=1,x=[4,5]}] : {i:int, x:int list} list
 from (i, j) in [(2, 5), (1, 1), (2, 7)]
   group i compute {mid = ((min over j) + (max over j)) div 2};
-> val it = [{i=1,mid=1},{i=2,mid=6}] : {i:int, mid:int} list
+> val it = [{i=2,mid=6},{i=1,mid=1}] : {i:int, mid:int} list
 from i in [2, 1, 2]
   compute 1;
 > val it = 1 : int
@@ -1039,26 +1194,26 @@ from i in [2, 1, 2]
 > val it = 2 : int
 from i in [2, 1, 2]
   group i compute {c = count (bag ["a", "b"])};
-> val it = [{c=2,i=1},{c=2,i=2}] : {c:int, i:int} list
+> val it = [{c=2,i=2},{c=2,i=1}] : {c:int, i:int} list
 
-(*) Duplicate field name across 'group' and 'compute' clauses. The
-(*) error points at the offending label (the second occurrence).
+(* Duplicate field name across 'group' and 'compute' clauses. The
+ * error points at the offending label (the second occurrence). *)
 from e in [{x = 1, y = 5}]
   group {a = e.x}
   compute {a = sum over e.y};
 > stdIn:3.12 Error: duplicate field name 'a' in group
 >   raised at: stdIn:3.12
 
-(*) When the duplicate label is implicit (derived from the field
-(*) expression), the error position is the field expression itself.
+(* When the duplicate label is implicit (derived from the field
+ * expression), the error position is the field expression itself. *)
 from e in [{x = 1, y = 5}]
   group {sum = e.x}
   compute sum over e.y;
 > stdIn:3.11-3.23 Error: duplicate field name 'sum' in group
 >   raised at: stdIn:3.11-3.23
 
-(*) Duplicate field name within the 'compute' record itself. The error
-(*) position is the second occurrence of the label.
+(* Duplicate field name within the 'compute' record itself. The error
+ * position is the second occurrence of the label. *)
 from e in [{x = 1, y = 5}, {x = 0, y = 1}, {x = 1, y = 1}]
   group {a = e.x, a = e.y};
 > stdIn:2.19 Error: duplicate field 'a' in record
@@ -1106,9 +1261,9 @@ from i in bag [1, 2, 3]
   compute Fn.id over i;
 > val it = [1,2,3] : int bag
 
-(*) Aggregate function that is a closure that references group key.
-(*) Uses List.length (not sum) because sum is bag-only and anonymous
-(*) functions in list context cannot yet adapt bag-only aggregates.
+(* Aggregate function that is a closure that references group key.
+ * Uses List.length (not sum) because sum is bag-only and anonymous
+ * functions in list context cannot yet adapt bag-only aggregates. *)
 from (k, v) in [(1, 5), (1, 6), (2, 7), (2, 10)]
   group k compute {x = (fn vs => k + List.length vs) over v};
 > val it = [{k=1,x=3},{k=2,x=4}] : {k:int, x:int} list
@@ -1170,8 +1325,8 @@ from i in [1, 2, 3]
 
 from i in [1, 2, 3]
   group i compute elements order i;
-> val it = [{elements=[1],i=1},{elements=[2],i=2},{elements=[3],i=3}]
->   : {elements:int list, i:int} list
+> val it = [{`elements`=[1],i=1},{`elements`=[2],i=2},{`elements`=[3],i=3}]
+>   : {`elements`:int list, i:int} list
 
 (*) Use "elements" in a query
 from (i, j) in [("a", 1), ("b", 4), ("a", 3)]
@@ -1198,15 +1353,16 @@ from (i, j) in [("a", 1), ("b", 4), ("a", 3)]
 from (i, j) in [("a", 1), ("b", 4), ("a", 3)]
   group {i} compute {elements, c = (length elements) - 1} order i;
 > val it =
->   [{c=1,elements=[{i="a",j=1},{i="a",j=3}],i="a"},
->    {c=0,elements=[{i="b",j=4}],i="b"}]
->   : {c:int, elements:{i:string, j:int} list, i:string} list
+>   [{c=1,`elements`=[{i="a",j=1},{i="a",j=3}],i="a"},
+>    {c=0,`elements`=[{i="b",j=4}],i="b"}]
+>   : {c:int, `elements`:{i:string, j:int} list, i:string} list
 
 from (i, j) in [("a", 1), ("b", 4), ("a", 3)]
   group i compute elements order i;
 > val it =
->   [{elements=[{i="a",j=1},{i="a",j=3}],i="a"},{elements=[{i="b",j=4}],i="b"}]
->   : {elements:{i:string, j:int} list, i:string} list
+>   [{`elements`=[{i="a",j=1},{i="a",j=3}],i="a"},
+>    {`elements`=[{i="b",j=4}],i="b"}]
+>   : {`elements`:{i:string, j:int} list, i:string} list
 
 from (i, j) in [("a", 1), ("b", 4), ("a", 3)]
   group {i} compute {s = from r in elements compute sum over r.j} order i;
@@ -1223,6 +1379,20 @@ from (i, j) in [("a", 1), ("b", 4), ("a", 3)]
   yield length elements;
 > stdIn:2.16-2.24 Error: 'elements' is only valid in a 'compute' clause
 >   raised at: stdIn:2.16-2.24
+
+(* "elements" is invalid in a "yield" that follows a "group" whose "compute"
+   created a field called "elements". (Previously this crashed the compiler
+   because "elements" remained bound after the "compute" clause.) *)
+from i in [1, 2, 3]
+  group i compute {elements}
+  yield elements;
+> stdIn:3.9-3.17 Error: 'elements' is only valid in a 'compute' clause
+>   raised at: stdIn:3.9-3.17
+
+from i in [1, 2, 3]
+  group {j = i mod 2} compute {elements}
+  yield `elements`;
+> val it = [[1,3],[2]] : int list list
 
 (*) "elements" is invalid at top-level
 elements;
@@ -1253,9 +1423,9 @@ from e in emps
     end;
 > val it = [200,202,204,206] : int list
 
-(*) 'distinct' is equivalent to 'group' with all fields
-(*) Query 1, using `distinct`
-(*) (The 'order' clause is for deterministic results.)
+(* 'distinct' is equivalent to 'group' with all fields
+ * Query 1, using `distinct`
+ * (The 'order' clause is for deterministic results.) *)
 from e in scott.emps
   yield {e.job, e.deptno}
   distinct
@@ -1266,8 +1436,8 @@ from e in scott.emps
 >    {deptno=30,job="MANAGER"},{deptno=10,job="PRESIDENT"},
 >    {deptno=30,job="SALESMAN"}] : {deptno:int, job:string} list
 
-(*) Query 2, using `group` with no aggregate functions, equivalent to query 1
-(*) (The 'order' clause is for deterministic results.)
+(* Query 2, using `group` with no aggregate functions, equivalent to query 1
+ * (The 'order' clause is for deterministic results.) *)
 from e in scott.emps
   yield {e.job, e.deptno}
   group {job, deptno}
@@ -1435,8 +1605,8 @@ from e in emps, d in depts
 > val it = [{count=4,deptno=10},{count=4,deptno=20},{count=8,deptno=30}]
 >   : {count:int, deptno:int} list
 
-(*) join with intervening 'where'
-(*) we can't write ', d in depts' after 'where'
+(* join with intervening 'where'
+ * we can't write ', d in depts' after 'where' *)
 from e in emps
   where e.name elem ["Shaggy", "Fred"]
   join d in depts
@@ -1476,8 +1646,8 @@ from e in emps
 >    {d={deptno=30,name="Engineering"},e={deptno=30,id=103,name="Scooby"}}]
 >   : {d:{deptno:int, name:string}, e:{deptno:int, id:int, name:string}} list
 
-(*) exists (defining the "exists" function ourselves)
-(*) and correlated sub-query
+(* exists (defining the "exists" function ourselves)
+ * and correlated sub-query *)
 let
   fun exists_ [] = false
     | exists_ (hd :: tl) = true
@@ -1578,7 +1748,7 @@ from i in [2, 1, 2, 2, 2, 3] union [2, 2, 4];
 from i in [2, 1, 2, 2, 2, 3] union distinct [2, 2, 4];
 > val it = [2,1,3,4] : int list
 from i in [2, 1, 2, 2, 2, 3] union [2, 2, 4] distinct;
-> val it = [1,2,3,4] : int list
+> val it = [2,1,3,4] : int list
 from i in [2, 1, 2, 2, 2, 3] intersect [2, 2, 4];
 > val it = [2,2] : int list
 from i in [2, 1, 2, 2, 2, 3] intersect distinct [2, 2, 4];
@@ -1591,6 +1761,50 @@ from i in [2, 1, 2, 2, 2, 3] except distinct [2, 2, 4];
 > val it = [1,3] : int list
 from i in [2, 1, 2, 2, 2, 3] except [2, 2, 4] distinct;
 > val it = [1,2,3] : int list
+
+(* A set operation may directly follow a 'distinct' (or 'group') step, where
+   the row's variables live in the environment rather than on the stack.
+   To make this work in morel-java, the compiler adds a 'rematerialize'
+   adapter. *)
+from i in [2, 1, 2, 3] distinct except [2];
+> val it = [1,3] : int list
+from i in [2, 1, 2, 3] distinct union [9];
+> val it = [2,1,3,9] : int list
+from i in [2, 1, 2, 3] distinct intersect [2];
+> val it = [2] : int list
+from i in [2, 1, 2, 3] group i except [2];
+> val it = [1,3] : int list
+
+from i in [2, 1, 2, 2, 2, 3]
+  distinct
+  except (from j in [2, 4] distinct)
+  distinct;
+> val it = [1,3] : int list
+
+(* Set operations over record-valued rows. *)
+from i in [1, 2, 3]
+  yield {a = i, b = i + 1}
+  except [{a = 2, b = 3}];
+> val it = [{a=1,b=2},{a=3,b=4}] : {a:int, b:int} list
+from i in [1, 2, 3]
+  yield {a = i, b = i + 1}
+  intersect [{a = 2, b = 3}];
+> val it = [{a=2,b=3}] : {a:int, b:int} list
+from e in scott.emps
+  group e.deptno compute {c = count over ()}
+  except [{c = 3, deptno = 10}]
+  order deptno;
+> val it = [{c=5,deptno=20},{c=6,deptno=30}] : {c:int, deptno:int} list
+
+(* In the morel-java implementation, the scan emits {j, i} records, which
+   an adapter permutes to {i, j} to match those from except's argument. *)
+from j in [1, 2],
+    i in ["x", "y"]
+  except [{i = "y", j = 2}];
+> val it = [{i="x",j=1},{i="y",j=1},{i="x",j=2}] : {i:string, j:int} list
+from i in [(1, "x"), (2, "y")]
+  except [(2, "y")];
+> val it = [(1,"x")] : (int * string) list
 
 (*) Two arguments to union, except, intersect
 from i in [2, 1, 2, 2, 2, 3] union [2, 2, 4];
@@ -1644,18 +1858,18 @@ from d in scott.depts yield d.deptno except [10, 15, 20];
 val orders = [{id=1, items=["beer"]}, {id=2, items=[]}];
 > val orders = [{id=1,items=["beer"]},{id=2,items=[]}]
 >   : {id:int, items:string list} list
-from `o` in orders
-  union `o`.items;
-> stdIn:2.9-2.12 Error: unbound variable or constructor: o
->   raised at: stdIn:2.9-2.12
-from `o` in orders
-  except `o`.items;
-> stdIn:2.10-2.13 Error: unbound variable or constructor: o
->   raised at: stdIn:2.10-2.13
-from `o` in orders
-  intersect `o`.items;
-> stdIn:2.13-2.16 Error: unbound variable or constructor: o
->   raised at: stdIn:2.13-2.16
+from r in orders
+  union r.items;
+> stdIn:2.9 Error: unbound variable or constructor: r
+>   raised at: stdIn:2.9
+from r in orders
+  except r.items;
+> stdIn:2.10 Error: unbound variable or constructor: r
+>   raised at: stdIn:2.10
+from r in orders
+  intersect r.items;
+> stdIn:2.13 Error: unbound variable or constructor: r
+>   raised at: stdIn:2.13
 
 (*) union followed by group
 from x in (from e in emps yield e.deptno)
@@ -1751,8 +1965,8 @@ order deptno;
 >   [{count=1,deptno=10,sum=100},{count=1,deptno=20,sum=101},
 >    {count=2,deptno=30,sum=205}] : {count:int, deptno:int, sum:int} list
 
-(*) As previous, without the implied "deptno =" in "group",
-(*) and "sum =" and "count =" in "compute".
+(* As previous, without the implied "deptno =" in "group",
+ * and "sum =" and "count =" in "compute". *)
 from e in emps
 group e.deptno
   compute {sum over e.id,
@@ -1842,7 +2056,8 @@ order deptno;
 >   [{deptno=10,existsId=true,existsStar=true,notExistsId=false,sumId=100},
 >    {deptno=20,existsId=true,existsStar=true,notExistsId=false,sumId=101},
 >    {deptno=30,existsId=true,existsStar=true,notExistsId=false,sumId=205}]
->   : {deptno:int, existsId:bool, existsStar:bool, notExistsId:bool, sumId:int} list
+>   : {deptno:int, existsId:bool, existsStar:bool, notExistsId:bool, sumId:int}
+>     list
 
 (*) 'compute' with 'empty' and 'nonEmpty' as an aggregate functions
 from e in emps
@@ -1855,8 +2070,8 @@ where e.deptno = 50
 compute {empty over (), nonEmpty over ()};
 > val it = {empty=true,nonEmpty=false} : {empty:bool, nonEmpty:bool}
 
-(*) 'group' with record key
-(*) (useful if we want to refer to 'e' later in the pipeline)
+(* 'group' with record key
+ * (useful if we want to refer to 'e' later in the pipeline) *)
 from e in emps
 group {e = {e.deptno, odd = e.id mod 2 = 1}} compute {c = count over ()}
 yield {e.deptno, c1 = c + 1}
@@ -1882,8 +2097,8 @@ from e in emps, d in depts
 where e.deptno = d.deptno
 group d;
 > val it =
->   [{deptno=20,name="HR"},{deptno=30,name="Engineering"},
->    {deptno=10,name="Sales"}] : {deptno:int, name:string} list
+>   [{deptno=10,name="Sales"},{deptno=20,name="HR"},
+>    {deptno=30,name="Engineering"}] : {deptno:int, name:string} list
 
 (*) Yield a variable whose value is a record.
 from e in emps, d in depts
@@ -1915,9 +2130,9 @@ from e in emps
 group {} compute {sumId = sum over e.id};
 > val it = [{sumId=406}] : {sumId:int} list
 
-(*) 'group' with aggregate function that references the key.
-(*) Uses List.length (not sum) because sum is bag-only and anonymous
-(*) functions in list context cannot yet adapt bag-only aggregates.
+(* 'group' with aggregate function that references the key.
+ * Uses List.length (not sum) because sum is bag-only and anonymous
+ * functions in list context cannot yet adapt bag-only aggregates. *)
 from (k, v) in [(1, 5), (1, 6), (2, 7), (2, 10)]
 group k compute {x = (fn vs => k + List.length vs) over v};
 > val it = [{k=1,x=3},{k=2,x=4}] : {k:int, x:int} list
@@ -1929,7 +2144,7 @@ from (x, y, z) in [("a", "p", "e"), ("m", "a", "n"), ("a", "l", "e"), ("a", "w",
 (*) similar, but with composite key
 from (x, y, z) in [("a", "p", "e"), ("m", "a", "n"), ("a", "l", "e"), ("a", "w", "e")]
   group {x, z} compute {a = (fn ys => x ^ ":" ^ z ^ ":" ^ (concat ys)) over y};
-> val it = [{a="m:n:a",x="m",z="n"},{a="a:e:plw",x="a",z="e"}]
+> val it = [{a="a:e:plw",x="a",z="e"},{a="m:n:a",x="m",z="n"}]
 >   : {a:string, x:string, z:string} list
 
 (*) similar, but aggregate does not reference key
@@ -2028,18 +2243,18 @@ where e.deptno = d.deptno
 group e.deptno compute {rows = (fn x => x) over current}
 order deptno;
 > val it =
->   [
->    {deptno=10,
+>   [{deptno=10,
 >     rows=[{d={deptno=10,name="Sales"},e={deptno=10,id=100,name="Fred"}}]},
 >    {deptno=20,
 >     rows=[{d={deptno=20,name="HR"},e={deptno=20,id=101,name="Velma"}}]},
 >    {deptno=30,
->     rows=
->     [{d={deptno=30,name="Engineering"},e={deptno=30,id=102,name="Shaggy"}},
->      {d={deptno=30,name="Engineering"},e={deptno=30,id=103,name="Scooby"}}]}]
->   :
->     {deptno:int,
->      rows:{d:{deptno:int, name:string}, e:{deptno:int, id:int, name:string}} list} list
+>     rows=[{d={deptno=30,name="Engineering"},
+>            e={deptno=30,id=102,name="Shaggy"}},
+>           {d={deptno=30,name="Engineering"},
+>            e={deptno=30,id=103,name="Scooby"}}]}]
+>   : {deptno:int,
+>       rows:{d:{deptno:int, name:string}, e:{deptno:int, id:int, name:string}}
+>            list} list
 
 (*) Group followed by yield
 from e in emps
@@ -2573,7 +2788,8 @@ from t1 in triples, t2 in triples
 >   [{t1={foo=fn,x=1,y=2},t2={foo=fn,x=1,y=2}},
 >    {t1={foo=fn,x=3,y=5},t2={foo=fn,x=3,y=5}},
 >    {t1={foo=fn,x=2,y=6},t2={foo=fn,x=2,y=6}}]
->   : {t1:{foo:int -> int, x:int, y:int}, t2:{foo:int -> int, x:int, y:int}} list
+>   : {t1:{foo:int -> int, x:int, y:int}, t2:{foo:int -> int, x:int, y:int}}
+>     list
  (* (~1+2,2) < (~3+5,5) < (~2+6,6) *)
 
 (*) A deep nested loop
@@ -2615,7 +2831,7 @@ yield {r1.j, r1.s};
 >    {j=8,s="morel"}] : {j:int, s:string} list
 Sys.plan();
 > val it =
->   "from(sink join(pat r1, exp apply2(fnValue List.tabulate, constant(6), match(i, tuple(stack(offset 1, name i), apply2(fnValue +, stack(offset 1, name i), constant(3)), apply3(fnValue String.substring, constant(morel), constant(0), stack(offset 1, name i))))), sink collect(tuple(apply(fnValue nth:1, argCode stack(offset 1, name r1)), apply(fnValue nth:2, argCode stack(offset 1, name r1))))))"
+>   "from(sink join(pat r1, exp apply2(fnValue List.tabulate, constant(6), match(i, tuple(stack(offset 1, name i), apply2(fnValue Int.+, stack(offset 1, name i), constant(3)), apply3(fnValue String.substring, constant(morel), constant(0), stack(offset 1, name i))))), sink collect(tuple(apply(fnValue nth:1, argCode stack(offset 1, name r1)), apply(fnValue nth:2, argCode stack(offset 1, name r1))))))"
 >   : string
 
 
@@ -2633,8 +2849,8 @@ Sys.plan();
 >   "calcite(plan LogicalProject(j=[$1], s=[$2])\n  LogicalTableFunctionScan(invocation=[morelTable('#tabulate List (6, fn i2 => {i = i2, j = i2 + 3, s = #substring String (\"morel\", 0, i2)})', '{\n  \"fields\": [\n    {\n      \"type\": \"INTEGER\",\n      \"nullable\": false,\n      \"name\": \"i\"\n    },\n    {\n      \"type\": \"INTEGER\",\n      \"nullable\": false,\n      \"name\": \"j\"\n    },\n    {\n      \"type\": \"VARCHAR\",\n      \"nullable\": false,\n      \"precision\": -1,\n      \"name\": \"s\"\n    }\n  ],\n  \"nullable\": false\n}')], rowType=[RecordType(INTEGER i, INTEGER j, VARCHAR s)])\n)"
 >   : string
 
-(*) List expression in Hybrid mode (0% Calcite), with various
-(*) row types: record, tuple, primitive
+(* List expression in Hybrid mode (0% Calcite), with various
+ * row types: record, tuple, primitive *)
 List.filter (fn {i, j} => i mod 2 = 0) [{i = 1, j = 1}, {i = 2, j = 2}, {i = 3, j = 3}, {i = 4, j = 5}];
 > val it = [{i=2,j=2},{i=4,j=5}] : {i:int, j:int} list
 List.filter (fn (i, j) => i mod 2 = 0) [(1, 1), (2, 2), (3, 3), (4, 5)];
@@ -2642,8 +2858,8 @@ List.filter (fn (i, j) => i mod 2 = 0) [(1, 1), (2, 2), (3, 3), (4, 5)];
 List.filter (fn i => i mod 2 = 0) [1, 2, 3, 4];
 > val it = [2,4] : int list
 
-(*) Parameterized view
-(*) (Funky variable names like 'e138' are just to ensure stable plans.)
+(* Parameterized view
+ * (Funky variable names like 'e138' are just to ensure stable plans.) *)
 Sys.set ("hybrid", false);
 > val it = () : unit
 let
@@ -2660,8 +2876,8 @@ Sys.plan();
 >   "from(sink join(pat e138, exp constant([[10, 100, Fred], [20, 101, Velma], [30, 102, Shaggy], [30, 103, Scooby]]), sink where(condition apply2(fnValue =, apply(fnValue nth:0, argCode stack(offset 1, name e138)), constant(30)), sink yield(codes [stack(offset 1, name e138)], sink collect(apply(fnValue nth:2, argCode stack(offset 1, name e139)))))))"
 >   : string
 
-(*) Same, via a predicate
-(*) (Funky variable names like 'e140' are just to ensure stable plans.)
+(* Same, via a predicate
+ * (Funky variable names like 'e140' are just to ensure stable plans.) *)
 let
   fun empsIn emps predicate =
     from e140 in emps
@@ -2685,6 +2901,13 @@ from i in [1,2,3]
   through i2 in (map (fn x => [x]))
   through i3 in (map (fn x => [x]));
 > val it = [[[1]],[[2]],[[3]]] : int list list list
+
+(* The function in a 'through' may be a structure member such as
+   'List.map'; resolving it rewrites the expression, which once left the
+   step's type unregistered and threw a NullPointerException. *)
+from i in [1,2,3]
+  through xs in (List.map (fn x => x * 10));
+> val it = [10,20,30] : int list
 
 let
   fun clean emps =
@@ -2775,9 +2998,9 @@ from d in scott.depts
 
 (*) through a pivot function
 
-(*) Pivot converts a list of lists into a list whose elements are
-(*) the first element of each list, the second element of each list,
-(*) and so forth.
+(* Pivot converts a list of lists into a list whose elements are
+ * the first element of each list, the second element of each list,
+ * and so forth. *)
 fun pivot listlists =
   if listlists = [] then
     []
