@@ -101,23 +101,24 @@ any push; get explicit confirmation before pushing.
   independent bugs** (Morel's Calcite *plans* are correct in both cases — the
   fault is downstream in execution):
   - **Bug A — set-op whose operand is a JDBC/subquery (not a literal):**
-    **FIXED** in `CalciteCompiler.setStep` by adding
-    `harmonizeRowTypes(cx.relBuilder, n)` before the `minus`/`intersect`/`union`
-    call (the operator-application path already did this; the from-step path did
-    not). Without it the `Values` operand and the `JdbcTableScan` operand have
+    **FIXED & MERGED upstream (#391 / PR #403).** `CalciteCompiler.setStep`
+    now calls `harmonizeRowTypes(cx.relBuilder, n)` before the
+    `minus`/`intersect`/`union` (the operator-application path already did).
+    Without it the `Values` operand and the `JdbcTableScan` operand have
     different row types, so Calcite's interpreter `SetOpNode.run()`
-    `HashSet<Row>` membership never matches — `except` became a no-op,
+    `HashSet<Row>` membership never matched — `except` became a no-op,
     `intersect` returned `[]`. `union` was unaffected (it emits without
-    comparing rows). The two formerly-disabled JDBC-operand cases in
-    `AlgebraTest.testQueryList` are now re-enabled and pass.
-  - **Bug B — chained `except` / 3+-operand `intersect`:** still open,
-    **Calcite-side**. `org.apache.calcite.interpreter.SetOpNode` reads only
-    `source(rel,0)` and `source(rel,1)`, so operands ≥3 of a multi-input
-    `Minus`/`Intersect` are silently dropped. `union` is immune (multi-input
-    union goes through a different interpreter path). Workaround would be to
-    binarize minus/intersect in `setStep` (nested 2-input nodes) or fix Calcite.
-    Repro kept disabled in `testQueryList`:
-    `from i in [1,2,3] except [2,5,4], [2,1,6]` ⇒ native `[3]`, Calcite `[1,3]`.
+    comparing rows).
+  - **Bug B — chained `except` / 3+-operand `intersect`:** **FIXED on the
+    fork (#402, PR #404 open upstream); also logged as Calcite CALCITE-7628.**
+    Root cause is Calcite-side: `org.apache.calcite.interpreter.SetOpNode`
+    reads only `source(rel,0)`/`source(rel,1)`, so operands ≥3 of a
+    multi-input `Minus`/`Intersect` are silently dropped (`union` is immune,
+    different interpreter path). Short-term fix per Hyde: `foldSetOp` in
+    `CalciteCompiler` binarizes `minus`/`intersect` into a left-associative
+    chain of 2-input nodes (both `setStep` and the operator path); revert once
+    a Calcite release with CALCITE-7628 is picked up. Re-enabled repro in
+    `testQueryList`: `from i in [1,2,3] except [2,5,4], [2,1,6]` ⇒ `[3]`.
   Native (HYBRID=false) is correct throughout.
 - **#299** (open) — declaring a function whose arg could be `list` or `bag`
   throws `UnsupportedOperationException`. Relevant to `elem`/`notelem`
