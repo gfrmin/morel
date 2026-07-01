@@ -1037,6 +1037,7 @@ public class AlgebraTest {
         .withBinding("scott", BuiltInDataSet.SCOTT)
         .assertSql(ClickHouseSqlDialect.DEFAULT, is(sql));
   }
+
   /** Tests generating ClickHouse SQL with a filter. */
   @Test
   void testToSqlFilter() {

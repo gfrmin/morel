@@ -108,20 +108,25 @@ public class Calcite {
    * a foreign value named {@code "db"}.
    */
   public static Calcite withJdbc(String url, String schema) {
-    return new JdbcCalcite(url, schema);
+    // Credentials come from CLICKHOUSE_USER / CLICKHOUSE_PASSWORD; the URL
+    // form has nowhere to carry them.
+    return new JdbcCalcite(
+        url,
+        schema,
+        envOrDefault("CLICKHOUSE_USER", "default"),
+        envOrDefault("CLICKHOUSE_PASSWORD", ""));
   }
 
   /**
    * Creates a runtime context backed by a JDBC connection using environment
-   * variables (or {@code .env} file) for connection settings: {@code
-   * CLICKHOUSE_HOST}, {@code CLICKHOUSE_PORT}, {@code CLICKHOUSE_USER}, {@code
-   * CLICKHOUSE_PASSWORD}.
+   * variables for connection settings: {@code CLICKHOUSE_HOST}, {@code
+   * CLICKHOUSE_PORT}, {@code CLICKHOUSE_USER}, {@code CLICKHOUSE_PASSWORD}.
    */
   public static Calcite withJdbcFromEnv(String schema) {
     final String host = envOrDefault("CLICKHOUSE_HOST", "localhost");
     final String port = envOrDefault("CLICKHOUSE_PORT", "8123");
     final String url = "jdbc:clickhouse://" + host + ":" + port + "/" + schema;
-    return new JdbcCalcite(url, schema);
+    return withJdbc(url, schema);
   }
 
   /** Creates an empty RelBuilder. */
@@ -333,21 +338,21 @@ public class Calcite {
 
   /** Extension to Calcite context that connects to a JDBC database. */
   private static class JdbcCalcite extends Calcite {
+    /** Name under which the JDBC schema is exposed as a foreign value. */
+    static final String DB = "db";
+
     final ImmutableMap<String, ForeignValue> valueMap;
     final DataSource ds;
 
-    JdbcCalcite(String url, String schema) {
-      final String user = envOrDefault("CLICKHOUSE_USER", "default");
-      final String password = envOrDefault("CLICKHOUSE_PASSWORD", "");
+    JdbcCalcite(String url, String schema, String user, String password) {
       this.ds = JdbcSchema.dataSource(url, null, user, password);
       final JdbcSchema jdbcSchema =
-          JdbcSchema.create(rootSchema, "db", ds, null, schema);
-      rootSchema.add("db", jdbcSchema);
-      final SchemaPlus schemaPlus =
-          requireNonNull(rootSchema.getSubSchema("db"));
+          JdbcSchema.create(rootSchema, DB, ds, null, schema);
+      rootSchema.add(DB, jdbcSchema);
+      final SchemaPlus schemaPlus = requireNonNull(rootSchema.getSubSchema(DB));
       this.valueMap =
           ImmutableMap.of(
-              "db",
+              DB,
               new CalciteForeignValue(
                   this,
                   schemaPlus,

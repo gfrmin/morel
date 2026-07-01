@@ -367,8 +367,12 @@ class Ml {
   /**
    * Asserts that the generated SQL matches the given matcher.
    *
-   * <p>Tries the HYBRID compilation path first (handles overloaded operators),
-   * then falls back to direct {@code toRel()} for JDBC-backed foreign values.
+   * <p>Tries the HYBRID compilation path first (handles overloaded operators).
+   * Whenever that path does not produce a pure Calcite plan (for example, for
+   * JDBC-backed foreign values), falls back to direct {@code toRel()} over the
+   * resolved Core. The fallback is a different pipeline from the shell's, so a
+   * match via the fallback does not prove the shell would generate the same
+   * SQL.
    */
   Ml assertSql(SqlDialect dialect, Matcher<String> matcher) {
     final TypeSystem typeSystem = new TypeSystem();
@@ -400,7 +404,7 @@ class Ml {
       }
     }
 
-    // Fall back to direct toRel() for JDBC-backed sources.
+    // Fall back to direct toRel() (see javadoc).
     final MorelParserImpl parser2 = new MorelParserImpl(new StringReader(ml));
     final AstNode statement2 = parser2.statementEofSafe();
     final TypeResolver.Resolved resolved =
