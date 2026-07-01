@@ -19,6 +19,8 @@
 package net.hydromatic.morel;
 
 import static java.util.Objects.requireNonNull;
+import static net.hydromatic.morel.util.Static.last;
+import static net.hydromatic.morel.util.Static.skipLast;
 import static net.hydromatic.morel.util.Static.str;
 
 import com.google.common.collect.ImmutableList;
@@ -286,95 +288,20 @@ public class Shell {
   private void runToSql() {
     final SqlDialect dialect = resolveDialect(config.sql.dialect);
     final TypeSystem typeSystem = new TypeSystem();
-    final Map<Prop, Object> propMap = new LinkedHashMap<>();
-    Prop.DIRECTORY.set(propMap, config.directory);
-    Prop.SCRIPT_DIRECTORY.set(propMap, config.directory);
-    Prop.HYBRID.set(propMap, true);
-    final Session session = new Session(propMap, typeSystem);
-    final Calcite calcite;
-    if (config.sql.jdbc != null && config.sql.jdbc.startsWith("jdbc:")) {
-      final String schema = extractSchema(config.sql.jdbc);
-      calcite = Calcite.withJdbc(config.sql.jdbc, schema);
-    } else if (config.sql.jdbc != null) {
-      // --jdbc=<schema> uses env vars for connection
-      calcite = Calcite.withJdbcFromEnv(config.sql.jdbc);
-    } else {
-      calcite = Calcite.withDataSets(ImmutableMap.of());
-    }
-    final Map<String, ForeignValue> allForeign =
-        new LinkedHashMap<>(config.valueMap);
-    allForeign.putAll(calcite.foreignValues());
-    Environment env = Environments.env(typeSystem, session, allForeign);
-
-    final String code;
-    if (config.sql.file != null) {
-      try {
-        code = Files.readString(Paths.get(config.sql.file));
-      } catch (IOException e) {
-        terminal.writer().println("Cannot read file: " + e.getMessage());
-        terminal.writer().flush();
-        return;
-      }
-    } else if (config.eval != null) {
-      code = config.eval.trim().endsWith(";") ? config.eval : config.eval + ";";
-    } else {
-      terminal.writer().println("--dialect requires -e or a .sml file");
-      terminal.writer().flush();
+    final Session session = newHybridSession(typeSystem);
+    final Calcite calcite = newCalcite();
+    final String code = readSource();
+    if (code == null) {
       return;
     }
-
     try {
-      final MorelParserImpl parser =
-          new MorelParserImpl(new StringReader(code));
-      parser.zero("transform");
-
-      // Parse all statements, evaluate intermediate ones,
-      // generate SQL for the last.
-      AstNode lastStatement = null;
-      for (; ; ) {
-        final AstNode statement = parser.statementSemicolonOrEofSafe();
-        if (statement == null) {
-          break;
-        }
-        if (lastStatement != null) {
-          // Evaluate the previous statement to build env
-          final Tracer tracer = Tracers.empty();
-          final CompiledStatement compiled =
-              Compiles.prepareStatement(
-                  typeSystem,
-                  session,
-                  env,
-                  lastStatement,
-                  calcite,
-                  w -> {},
-                  tracer);
-          final List<Binding> bindings = new ArrayList<>();
-          compiled.eval(session, env, line -> {}, bindings::add);
-          env = env.bindAll(bindings);
-        }
-        lastStatement = statement;
-      }
-
-      if (lastStatement == null) {
-        terminal.writer().println("No statements found");
-        terminal.writer().flush();
-        return;
-      }
-
-      // Generate SQL for the last statement
-      final Tracer tracer = Tracers.empty();
+      final List<CompileException> warningList = new ArrayList<>();
       final CompiledStatement compiled =
-          Compiles.prepareStatement(
-              typeSystem,
-              session,
-              env,
-              lastStatement,
-              calcite,
-              w -> {},
-              tracer);
-      final Code plan = compiled.getCode();
-      if (plan != null) {
-        final RelNode rel = Calcite.extractRelNode(plan);
+          compileLast(code, typeSystem, session, calcite, warningList);
+      warningList.forEach(w -> terminal.writer().println(w.description()));
+      if (compiled != null) {
+        final Code plan = compiled.getCode();
+        final RelNode rel = plan == null ? null : Calcite.extractRelNode(plan);
         if (rel != null) {
           final String sql = calcite.toSql(rel, dialect);
           if (config.sql.materialize != null) {
@@ -382,110 +309,183 @@ public class Shell {
           } else {
             terminal.writer().println(sql);
           }
-          terminal.writer().flush();
-          return;
+        } else {
+          terminal
+              .writer()
+              .println(
+                  "Expression cannot be converted to SQL"
+                      + (plan == null ? " (no code)" : ""));
         }
       }
-      terminal
-          .writer()
-          .println(
-              "Expression cannot be converted to SQL"
-                  + (plan == null ? " (no code)" : ""));
     } catch (MorelParseException | CompileException e) {
-      terminal.writer().println(e.getMessage());
+      terminal.writer().println(e.description());
     } catch (RuntimeException e) {
-      terminal
-          .writer()
-          .println("Expression cannot be converted to SQL: " + e.getMessage());
+      terminal.writer().println("Error: " + e);
     }
     terminal.writer().flush();
   }
 
   /**
    * Compiles an expression and creates an incremental DBSP pipeline in
-   * ClickHouse via JDBC.
+   * ClickHouse via JDBC; without a JDBC connection, prints the DDL.
    */
   private void runIncrementalPipeline() {
-    final Calcite calcite;
-    if (config.sql.jdbc.startsWith("jdbc:")) {
-      calcite =
-          Calcite.withJdbc(config.sql.jdbc, extractSchema(config.sql.jdbc));
-    } else {
-      calcite = Calcite.withJdbcFromEnv(config.sql.jdbc);
-    }
     // Incremental pipelines are only generated for ClickHouse.
     final SqlDialect dialect = ClickHouseSqlDialect.DEFAULT;
+    final String targetName = requireNonNull(config.sql.output);
     final TypeSystem typeSystem = new TypeSystem();
+    final Session session = newHybridSession(typeSystem);
+    final Calcite calcite = newCalcite();
+    final String code = readSource();
+    if (code == null) {
+      return;
+    }
+    try {
+      final List<CompileException> warningList = new ArrayList<>();
+      final CompiledStatement compiled =
+          compileLast(code, typeSystem, session, calcite, warningList);
+      warningList.forEach(w -> terminal.writer().println(w.description()));
+      if (compiled != null) {
+        final Code plan = compiled.getCode();
+        final RelNode rel = plan == null ? null : Calcite.extractRelNode(plan);
+        if (rel == null) {
+          terminal
+              .writer()
+              .println(
+                  "Expression cannot be converted to SQL"
+                      + (plan == null ? " (no code)" : ""));
+        } else {
+          final List<String> ddls =
+              calcite.toIncrementalDdl(rel, dialect, targetName);
+          final DataSource ds = calcite.getDataSource();
+          if (ds == null) {
+            // No JDBC connection; print the DDL instead of executing it.
+            ddls.forEach(ddl -> terminal.writer().println(ddl + ";\n"));
+          } else {
+            try (Connection conn = ds.getConnection();
+                Statement stmt = conn.createStatement()) {
+              for (String ddl : ddls) {
+                stmt.execute(ddl);
+              }
+            }
+            terminal.writer().println("Pipeline: " + targetName);
+          }
+        }
+      }
+    } catch (MorelParseException | CompileException e) {
+      terminal.writer().println(e.description());
+    } catch (SQLException e) {
+      terminal.writer().println("JDBC error: " + e.getMessage());
+    } catch (RuntimeException e) {
+      terminal.writer().println("Error: " + e);
+    }
+    terminal.writer().flush();
+  }
+
+  /**
+   * Creates the Calcite instance for the configured JDBC source, or an empty
+   * one when {@code --jdbc} is absent.
+   */
+  private Calcite newCalcite() {
+    if (config.sql.jdbc == null) {
+      return Calcite.withDataSets(ImmutableMap.of());
+    }
+    if (config.sql.jdbc.startsWith("jdbc:")) {
+      return Calcite.withJdbc(config.sql.jdbc, extractSchema(config.sql.jdbc));
+    }
+    // --jdbc=<schema> reads the connection from CLICKHOUSE_* environment
+    // variables
+    return Calcite.withJdbcFromEnv(config.sql.jdbc);
+  }
+
+  /**
+   * Creates a session on the HYBRID compilation path, so that relational
+   * expressions become Calcite plans.
+   */
+  private Session newHybridSession(TypeSystem typeSystem) {
     final Map<Prop, Object> propMap = new LinkedHashMap<>();
     Prop.DIRECTORY.set(propMap, config.directory);
     Prop.SCRIPT_DIRECTORY.set(propMap, config.directory);
     Prop.HYBRID.set(propMap, true);
-    final Session session = new Session(propMap, typeSystem);
+    return new Session(propMap, typeSystem);
+  }
+
+  /**
+   * Reads the source program from {@code --file} or {@code -e} (ensuring the
+   * latter ends with a semicolon); null, with a message printed, if neither is
+   * available or the file cannot be read.
+   */
+  private @Nullable String readSource() {
+    if (config.sql.file != null) {
+      try {
+        return Files.readString(Paths.get(config.sql.file));
+      } catch (IOException e) {
+        terminal.writer().println("Cannot read file: " + e.getMessage());
+        terminal.writer().flush();
+        return null;
+      }
+    }
+    if (config.eval != null) {
+      final String eval = config.eval;
+      return eval.trim().endsWith(";") ? eval : eval + ";";
+    }
+    terminal.writer().println("--dialect requires -e or a .sml file");
+    terminal.writer().flush();
+    return null;
+  }
+
+  /**
+   * Parses the source, evaluates all statements but the last to build up the
+   * environment, and returns the last statement compiled in that environment;
+   * null, with a message printed, if the source contains no statements.
+   */
+  private @Nullable CompiledStatement compileLast(
+      String code,
+      TypeSystem typeSystem,
+      Session session,
+      Calcite calcite,
+      List<CompileException> warningList) {
+    final MorelParserImpl parser = new MorelParserImpl(new StringReader(code));
+    parser.zero("eval");
+    final List<AstNode> statements = new ArrayList<>();
+    for (; ; ) {
+      final AstNode statement = parser.statementSemicolonOrEofSafe();
+      if (statement == null) {
+        break;
+      }
+      statements.add(statement);
+    }
+    if (statements.isEmpty()) {
+      terminal.writer().println("No statements found");
+      return null;
+    }
     final Map<String, ForeignValue> allForeign =
         new LinkedHashMap<>(config.valueMap);
     allForeign.putAll(calcite.foreignValues());
     Environment env = Environments.env(typeSystem, session, allForeign);
-
-    final String targetName = requireNonNull(config.sql.output);
-
-    final String code;
-    if (config.sql.file != null) {
-      try {
-        code = Files.readString(Paths.get(config.sql.file));
-      } catch (IOException e) {
-        terminal.writer().println("Cannot read file: " + e.getMessage());
-        terminal.writer().flush();
-        return;
-      }
-    } else {
-      code = config.eval.trim().endsWith(";") ? config.eval : config.eval + ";";
-    }
-
-    try {
-      final MorelParserImpl parser =
-          new MorelParserImpl(new StringReader(code));
-      parser.zero("jdbc");
-      final AstNode statement = parser.statementSemicolonSafe();
-      final Tracer tracer = Tracers.empty();
+    final Tracer tracer = Tracers.empty();
+    for (AstNode statement : skipLast(statements)) {
       final CompiledStatement compiled =
           Compiles.prepareStatement(
-              typeSystem, session, env, statement, calcite, w -> {}, tracer);
-      final Code plan = compiled.getCode();
-      if (plan == null) {
-        terminal.writer().println("No code produced");
-        terminal.writer().flush();
-        return;
-      }
-      final RelNode rel = Calcite.extractRelNode(plan);
-      if (rel == null) {
-        terminal.writer().println("Expression cannot be converted to SQL");
-        terminal.writer().flush();
-        return;
-      }
-      final List<String> ddls =
-          calcite.toIncrementalDdl(rel, dialect, targetName);
-      final DataSource ds = calcite.getDataSource();
-      if (ds == null) {
-        // No JDBC — just print DDL
-        ddls.forEach(ddl -> terminal.writer().println(ddl + ";\n"));
-        terminal.writer().flush();
-        return;
-      }
-      try (Connection conn = ds.getConnection();
-          Statement stmt = conn.createStatement()) {
-        for (String ddl : ddls) {
-          stmt.execute(ddl);
-        }
-      }
-      terminal.writer().println("Pipeline: " + targetName);
-    } catch (MorelParseException | CompileException e) {
-      terminal.writer().println(e.getMessage());
-    } catch (SQLException e) {
-      terminal.writer().println("JDBC error: " + e.getMessage());
-    } catch (RuntimeException e) {
-      terminal.writer().println("Error: " + e.getMessage());
+              typeSystem,
+              session,
+              env,
+              statement,
+              calcite,
+              warningList::add,
+              tracer);
+      final List<Binding> bindings = new ArrayList<>();
+      compiled.eval(session, env, line -> {}, bindings::add);
+      env = env.bindAll(bindings);
     }
-    terminal.writer().flush();
+    return Compiles.prepareStatement(
+        typeSystem,
+        session,
+        env,
+        last(statements),
+        calcite,
+        warningList::add,
+        tracer);
   }
 
   /** Resolves a dialect name to a {@link SqlDialect}. */
