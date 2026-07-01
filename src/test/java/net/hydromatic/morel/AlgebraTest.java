@@ -248,18 +248,12 @@ public class AlgebraTest {
       "from i in [1, 2, 3] union [2, 5, 4], [2, 1, 7]",
       "from i in [1, 2, 3] intersect [2, 5, 4]",
       "from i in [1, 2, 3] intersect [2, 5, 4], [2, 1, 6]",
-      // A three-operand intersect whose answer (the empty bag) differs if the
-      // third operand is dropped; guards the #402 binarization.
       "from i in [1, 2, 3] intersect [1, 2, 3], [99]",
       "from i in [1, 2, 3] except [2, 5, 4]",
       "from i in [1, 2, 3] except [2, 5, 4], [2, 1, 6]",
       "from i in [10, 15, 20] union (from d in scott.depts yield d.deptno)",
-      // Two-input except/intersect against a JDBC-backed subquery operand now
-      // work because setStep harmonizes row types before the set op (see #391):
-      "from i in [10, 15, 20]"
-          + " except (from d in scott.depts yield d.deptno)",
-      "from i in [10, 15, 20]"
-          + " intersect (from d in scott.depts yield d.deptno)",
+      "from i in [10, 15, 20] except (from d in scott.depts yield d.deptno)",
+      "from i in [10, 15, 20] intersect (from d in scott.depts yield d.deptno)",
 
       // the following 4 are equivalent
       "from e in scott.emps where e.deptno = 30 yield e.empno",

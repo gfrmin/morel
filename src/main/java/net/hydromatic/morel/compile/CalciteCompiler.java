@@ -354,10 +354,11 @@ public class CalciteCompiler extends Compiler {
                     cx.relBuilder.union(true, tuple.args.size());
                     return true;
                   case LIST_EXCEPT:
-                    foldSetOp(cx.relBuilder, true, true, tuple.args.size());
+                    foldSetOp(cx.relBuilder, Op.MINUS, true, tuple.args.size());
                     return true;
                   case LIST_INTERSECT:
-                    foldSetOp(cx.relBuilder, false, true, tuple.args.size());
+                    foldSetOp(
+                        cx.relBuilder, Op.EXCEPT, true, tuple.args.size());
                     return true;
                   default:
                     throw new AssertionError(builtIn);
@@ -479,9 +480,9 @@ public class CalciteCompiler extends Compiler {
   }
 
   /**
-   * Applies {@code minus} (if {@code minus} is true) or {@code intersect} to
-   * the top {@code n} relations on the stack, folding into a left-associative
-   * chain of two-input operations.
+   * Applies {@code minus} or {@code intersect} (depending on {@code op}) to the
+   * top {@code n} relations on the stack, folding into a left-associative chain
+   * of two-input operations.
    *
    * <p>Calcite's interpreter reads only the first two inputs of a multi-input
    * {@code Minus} or {@code Intersect} (CALCITE-7628), silently dropping the
@@ -489,7 +490,7 @@ public class CalciteCompiler extends Compiler {
    * unaffected and does not use this method.
    */
   private static void foldSetOp(
-      RelBuilder relBuilder, boolean minus, boolean all, int n) {
+      RelBuilder relBuilder, Op op, boolean all, int n) {
     if (n < 2) {
       return;
     }
@@ -504,10 +505,15 @@ public class CalciteCompiler extends Compiler {
     relBuilder.push(operands.get(0));
     for (int i = 1; i < n; i++) {
       relBuilder.push(operands.get(i));
-      if (minus) {
-        relBuilder.minus(all, 2);
-      } else {
-        relBuilder.intersect(all, 2);
+      switch (op) {
+        case EXCEPT:
+          relBuilder.minus(all, 2);
+          break;
+        case INTERSECT:
+          relBuilder.intersect(all, 2);
+          break;
+        default:
+          throw new AssertionError();
       }
     }
   }
@@ -913,10 +919,8 @@ public class CalciteCompiler extends Compiler {
     harmonizeRowTypes(cx.relBuilder, n);
     switch (setStep.op) {
       case EXCEPT:
-        foldSetOp(cx.relBuilder, true, !setStep.distinct, n);
-        break;
       case INTERSECT:
-        foldSetOp(cx.relBuilder, false, !setStep.distinct, n);
+        foldSetOp(cx.relBuilder, setStep.op, !setStep.distinct, n);
         break;
       case UNION:
         cx.relBuilder.union(!setStep.distinct, n);
