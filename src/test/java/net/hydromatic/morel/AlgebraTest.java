@@ -261,6 +261,11 @@ public class AlgebraTest {
       "List.`except` [[1, 1, 2, 3], [1]]",
       "List.`intersect` [[1, 1, 2, 3], [1, 1, 5]]",
       "List.concat [[1, 2], [3], [4, 5]]",
+      "[[1, 2], [3]]",
+      "[bag [1, 2], bag [3]]",
+      "from l in [[1, 2], [3]]",
+      "from l in [[1, 2], [3]] yield List.length l",
+      "Bag.concat [bag [1, 2], bag [3]]",
 
       // the following 4 are equivalent
       "from e in scott.emps where e.deptno = 30 yield e.empno",
