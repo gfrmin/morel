@@ -76,6 +76,7 @@ EVAL_EXPR=
 ECHO=
 FOREIGN=
 FILES=()
+SQL_OPTS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     (--help|-h)
@@ -106,20 +107,8 @@ while [ $# -gt 0 ]; do
       SUBCMD=smli
       shift
       ;;
-    (--dialect=*)
-      DIALECT="$1"
-      shift
-      ;;
-    (--jdbc=*)
-      JDBC="$1"
-      shift
-      ;;
-    (--materialize=*)
-      MATERIALIZE="$1"
-      shift
-      ;;
-    (--output=*)
-      MATERIALIZE="--materialize=${1#--output=}"
+    (--dialect=*|--jdbc=*|--materialize=*|--output=*)
+      SQL_OPTS+=("$1")
       shift
       ;;
     (--foreign=*)
@@ -214,9 +203,7 @@ case "$SUBCMD" in
       exec java $VM_OPTS -cp "${CP}" $JAVA_OPTS net.hydromatic.morel.Shell \
            "$DEFAULT_FOREIGN" \
            $FOREIGN \
-           $DIALECT \
-           $JDBC \
-           $MATERIALIZE \
+           "${SQL_OPTS[@]}" \
            --directory="$(pwd)" \
            --terminal=dumb \
            --banner=false \
@@ -225,6 +212,7 @@ case "$SUBCMD" in
       exec java $VM_OPTS -cp "${CP}" $JAVA_OPTS net.hydromatic.morel.Shell \
            "$DEFAULT_FOREIGN" \
            $FOREIGN \
+           "${SQL_OPTS[@]}" \
            --directory="$(pwd)" \
            $HEADLESS_OPTS \
            "${FILES[@]}"

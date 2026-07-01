@@ -194,7 +194,7 @@ public class Shell {
         c = c.withMaterialize(arg.substring("--materialize=".length()));
       }
       if (arg.startsWith("--output=")) {
-        c = c.withMaterialize(arg.substring("--output=".length()));
+        c = c.withOutput(arg.substring("--output=".length()));
       }
       if (arg.startsWith("--file=")) {
         c = c.withFile(arg.substring("--file=".length()));
@@ -213,6 +213,11 @@ public class Shell {
       "",
       "Options:",
       "  -e, --eval <expr>   Evaluate expression and exit",
+      "  --dialect=<name>    Print the expression as SQL (only 'clickhouse')",
+      "  --file=<f.sml>      Read the expression from a file",
+      "  --jdbc=<url|schema> Connect to a JDBC source (or CLICKHOUSE_* env)",
+      "  --materialize=<t>   CREATE TABLE <t> AS the generated SQL",
+      "  --output=<name>     Create an incremental pipeline targeting <name>",
       "  --help              Print this help",
     };
     Arrays.asList(usageLines).forEach(outLines);
@@ -229,7 +234,7 @@ public class Shell {
 
   /** Evaluates a single expression and prints the result. */
   private void runEval() {
-    if (config.dialect != null) {
+    if (config.sql.dialect != null) {
       runToSql();
       return;
     }
@@ -279,7 +284,7 @@ public class Shell {
    * resolved before generating the Calcite relational plan.
    */
   private void runToSql() {
-    final SqlDialect dialect = resolveDialect(config.dialect);
+    final SqlDialect dialect = resolveDialect(config.sql.dialect);
     final TypeSystem typeSystem = new TypeSystem();
     final Map<Prop, Object> propMap = new LinkedHashMap<>();
     Prop.DIRECTORY.set(propMap, config.directory);
@@ -287,12 +292,12 @@ public class Shell {
     Prop.HYBRID.set(propMap, true);
     final Session session = new Session(propMap, typeSystem);
     final Calcite calcite;
-    if (config.jdbc != null && config.jdbc.startsWith("jdbc:")) {
-      final String schema = extractSchema(config.jdbc);
-      calcite = Calcite.withJdbc(config.jdbc, schema);
-    } else if (config.jdbc != null) {
+    if (config.sql.jdbc != null && config.sql.jdbc.startsWith("jdbc:")) {
+      final String schema = extractSchema(config.sql.jdbc);
+      calcite = Calcite.withJdbc(config.sql.jdbc, schema);
+    } else if (config.sql.jdbc != null) {
       // --jdbc=<schema> uses env vars for connection
-      calcite = Calcite.withJdbcFromEnv(config.jdbc);
+      calcite = Calcite.withJdbcFromEnv(config.sql.jdbc);
     } else {
       calcite = Calcite.withDataSets(ImmutableMap.of());
     }
@@ -302,9 +307,9 @@ public class Shell {
     Environment env = Environments.env(typeSystem, session, allForeign);
 
     final String code;
-    if (config.file != null) {
+    if (config.sql.file != null) {
       try {
-        code = Files.readString(Paths.get(config.file));
+        code = Files.readString(Paths.get(config.sql.file));
       } catch (IOException e) {
         terminal.writer().println("Cannot read file: " + e.getMessage());
         terminal.writer().flush();
@@ -372,8 +377,8 @@ public class Shell {
         final RelNode rel = Calcite.extractRelNode(plan);
         if (rel != null) {
           final String sql = calcite.toSql(rel, dialect);
-          if (config.materialize != null) {
-            materialize(calcite, config.materialize, sql);
+          if (config.sql.materialize != null) {
+            materialize(calcite, config.sql.materialize, sql);
           } else {
             terminal.writer().println(sql);
           }
@@ -400,17 +405,16 @@ public class Shell {
    * Compiles an expression and creates an incremental DBSP pipeline in
    * ClickHouse via JDBC.
    */
-  private void runJdbc() {
-    final String schema;
+  private void runIncrementalPipeline() {
     final Calcite calcite;
-    if (config.jdbc.startsWith("jdbc:")) {
-      schema = extractSchema(config.jdbc);
-      calcite = Calcite.withJdbc(config.jdbc, schema);
+    if (config.sql.jdbc.startsWith("jdbc:")) {
+      calcite =
+          Calcite.withJdbc(config.sql.jdbc, extractSchema(config.sql.jdbc));
     } else {
-      schema = config.jdbc;
-      calcite = Calcite.withJdbcFromEnv(schema);
+      calcite = Calcite.withJdbcFromEnv(config.sql.jdbc);
     }
-    final SqlDialect dialect = inferDialect(config.jdbc);
+    // Incremental pipelines are only generated for ClickHouse.
+    final SqlDialect dialect = ClickHouseSqlDialect.DEFAULT;
     final TypeSystem typeSystem = new TypeSystem();
     final Map<Prop, Object> propMap = new LinkedHashMap<>();
     Prop.DIRECTORY.set(propMap, config.directory);
@@ -422,21 +426,12 @@ public class Shell {
     allForeign.putAll(calcite.foreignValues());
     Environment env = Environments.env(typeSystem, session, allForeign);
 
-    final String targetName;
-    if (config.materialize != null) {
-      targetName = config.materialize;
-    } else {
-      terminal
-          .writer()
-          .println("--jdbc requires --output=<name> for the target");
-      terminal.writer().flush();
-      return;
-    }
+    final String targetName = requireNonNull(config.sql.output);
 
     final String code;
-    if (config.file != null) {
+    if (config.sql.file != null) {
       try {
-        code = Files.readString(Paths.get(config.file));
+        code = Files.readString(Paths.get(config.sql.file));
       } catch (IOException e) {
         terminal.writer().println("Cannot read file: " + e.getMessage());
         terminal.writer().flush();
@@ -493,14 +488,6 @@ public class Shell {
     terminal.writer().flush();
   }
 
-  /** Infers the SQL dialect from a JDBC URL. */
-  private static SqlDialect inferDialect(String url) {
-    if (url.contains("clickhouse")) {
-      return ClickHouseSqlDialect.DEFAULT;
-    }
-    return ClickHouseSqlDialect.DEFAULT;
-  }
-
   /** Resolves a dialect name to a {@link SqlDialect}. */
   private static SqlDialect resolveDialect(@Nullable String name) {
     if (name == null) {
@@ -546,8 +533,13 @@ public class Shell {
    * {@code "mydb"}.
    */
   private static String extractSchema(String url) {
-    // Find the last '/' in the URL path
-    int lastSlash = url.lastIndexOf('/');
+    // Find the first '/' after the authority ("jdbc:x://host:port/db");
+    // without this, "jdbc:x://host:port" would yield "host:port".
+    final int authority = url.indexOf("://");
+    final int lastSlash =
+        url.lastIndexOf('/') > (authority < 0 ? -1 : authority + 2)
+            ? url.lastIndexOf('/')
+            : -1;
     if (lastSlash >= 0 && lastSlash < url.length() - 1) {
       String tail = url.substring(lastSlash + 1);
       // Remove query parameters if any
@@ -594,10 +586,15 @@ public class Shell {
       return;
     }
 
-    if (config.jdbc != null
-        && config.materialize != null
-        && (config.eval != null || config.file != null)) {
-      runJdbc();
+    if (config.sql.output != null) {
+      if (config.sql.jdbc == null) {
+        terminal.writer().println("--output requires --jdbc");
+      } else if (config.eval == null && config.sql.file == null) {
+        terminal.writer().println("--output requires -e or --file");
+      } else {
+        runIncrementalPipeline();
+      }
+      terminal.writer().flush();
       return;
     }
 
@@ -606,7 +603,7 @@ public class Shell {
       return;
     }
 
-    if (config.file != null && config.dialect != null) {
+    if (config.sql.file != null && config.sql.dialect != null) {
       runToSql();
       return;
     }
@@ -733,6 +730,8 @@ public class Shell {
 
     Config withMaterialize(@Nullable String materialize);
 
+    Config withOutput(@Nullable String output);
+
     Config withFile(@Nullable String file);
   }
 
@@ -748,10 +747,7 @@ public class Shell {
     private final Runnable pauseFn;
     private final int maxUseDepth;
     private final @Nullable String eval;
-    private final @Nullable String dialect;
-    private final @Nullable String jdbc;
-    private final @Nullable String materialize;
-    private final @Nullable String file;
+    private final SqlConfig sql;
 
     static final ConfigImpl DEFAULT =
         new ConfigImpl(
@@ -765,10 +761,7 @@ public class Shell {
             Runnables.doNothing(),
             -1,
             null,
-            null,
-            null,
-            null,
-            null);
+            SqlConfig.DEFAULT);
 
     private ConfigImpl(
         boolean banner,
@@ -781,10 +774,7 @@ public class Shell {
         Runnable pauseFn,
         int maxUseDepth,
         @Nullable String eval,
-        @Nullable String dialect,
-        @Nullable String jdbc,
-        @Nullable String materialize,
-        @Nullable String file) {
+        SqlConfig sql) {
       this.banner = banner;
       this.dumb = dumb;
       this.system = system;
@@ -795,10 +785,7 @@ public class Shell {
       this.pauseFn = requireNonNull(pauseFn, "pauseFn");
       this.maxUseDepth = maxUseDepth;
       this.eval = eval;
-      this.dialect = dialect;
-      this.jdbc = jdbc;
-      this.materialize = materialize;
-      this.file = file;
+      this.sql = requireNonNull(sql, "sql");
     }
 
     @Override
@@ -817,10 +804,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -839,10 +823,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -861,10 +842,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -883,10 +861,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -905,10 +880,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -929,10 +901,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -951,10 +920,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -973,10 +939,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -995,10 +958,7 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
     }
 
     @Override
@@ -1017,98 +977,110 @@ public class Shell {
           pauseFn,
           maxUseDepth,
           eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+          sql);
+    }
+
+    /** Creates a copy of this config with a new SQL-mode configuration. */
+    private ConfigImpl withSql(SqlConfig sql) {
+      if (this.sql == sql) {
+        return this;
+      }
+      return new ConfigImpl(
+          banner,
+          dumb,
+          system,
+          echo,
+          help,
+          valueMap,
+          directory,
+          pauseFn,
+          maxUseDepth,
+          eval,
+          sql);
     }
 
     @Override
     public ConfigImpl withDialect(@Nullable String dialect) {
-      if (Objects.equals(this.dialect, dialect)) {
-        return this;
-      }
-      return new ConfigImpl(
-          banner,
-          dumb,
-          system,
-          echo,
-          help,
-          valueMap,
-          directory,
-          pauseFn,
-          maxUseDepth,
-          eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+      return withSql(sql.withDialect(dialect));
     }
 
     @Override
     public ConfigImpl withJdbc(@Nullable String jdbc) {
-      if (Objects.equals(this.jdbc, jdbc)) {
-        return this;
-      }
-      return new ConfigImpl(
-          banner,
-          dumb,
-          system,
-          echo,
-          help,
-          valueMap,
-          directory,
-          pauseFn,
-          maxUseDepth,
-          eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+      return withSql(sql.withJdbc(jdbc));
     }
 
     @Override
     public ConfigImpl withMaterialize(@Nullable String materialize) {
-      if (Objects.equals(this.materialize, materialize)) {
-        return this;
-      }
-      return new ConfigImpl(
-          banner,
-          dumb,
-          system,
-          echo,
-          help,
-          valueMap,
-          directory,
-          pauseFn,
-          maxUseDepth,
-          eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+      return withSql(sql.withMaterialize(materialize));
+    }
+
+    @Override
+    public ConfigImpl withOutput(@Nullable String output) {
+      return withSql(sql.withOutput(output));
     }
 
     @Override
     public ConfigImpl withFile(@Nullable String file) {
-      if (Objects.equals(this.file, file)) {
-        return this;
-      }
-      return new ConfigImpl(
-          banner,
-          dumb,
-          system,
-          echo,
-          help,
-          valueMap,
-          directory,
-          pauseFn,
-          maxUseDepth,
-          eval,
-          dialect,
-          jdbc,
-          materialize,
-          file);
+      return withSql(sql.withFile(file));
+    }
+  }
+
+  /**
+   * Configuration of the SQL-generation modes: {@code --dialect}, {@code
+   * --jdbc}, {@code --materialize} (CREATE TABLE AS over the JDBC source),
+   * {@code --output} (incremental pipeline target), and {@code --file}.
+   */
+  private static class SqlConfig {
+    static final SqlConfig DEFAULT =
+        new SqlConfig(null, null, null, null, null);
+
+    final @Nullable String dialect;
+    final @Nullable String jdbc;
+    final @Nullable String materialize;
+    final @Nullable String output;
+    final @Nullable String file;
+
+    private SqlConfig(
+        @Nullable String dialect,
+        @Nullable String jdbc,
+        @Nullable String materialize,
+        @Nullable String output,
+        @Nullable String file) {
+      this.dialect = dialect;
+      this.jdbc = jdbc;
+      this.materialize = materialize;
+      this.output = output;
+      this.file = file;
+    }
+
+    SqlConfig withDialect(@Nullable String dialect) {
+      return Objects.equals(this.dialect, dialect)
+          ? this
+          : new SqlConfig(dialect, jdbc, materialize, output, file);
+    }
+
+    SqlConfig withJdbc(@Nullable String jdbc) {
+      return Objects.equals(this.jdbc, jdbc)
+          ? this
+          : new SqlConfig(dialect, jdbc, materialize, output, file);
+    }
+
+    SqlConfig withMaterialize(@Nullable String materialize) {
+      return Objects.equals(this.materialize, materialize)
+          ? this
+          : new SqlConfig(dialect, jdbc, materialize, output, file);
+    }
+
+    SqlConfig withOutput(@Nullable String output) {
+      return Objects.equals(this.output, output)
+          ? this
+          : new SqlConfig(dialect, jdbc, materialize, output, file);
+    }
+
+    SqlConfig withFile(@Nullable String file) {
+      return Objects.equals(this.file, file)
+          ? this
+          : new SqlConfig(dialect, jdbc, materialize, output, file);
     }
   }
 
