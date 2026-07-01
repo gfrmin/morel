@@ -48,6 +48,7 @@ import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
 import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
@@ -133,21 +134,25 @@ public class Calcite {
    * converting it to Morel list type {@code type}.
    */
   public Code code(Environment env, RelNode rel, Type type) {
-    // Transform the relational expression, converting sub-queries. For example,
-    // RexSubQuery.IN becomes a Join.
+    final RelNode rel2 = transform(rel);
+    final Function<Enumerable<Object[]>, List<Object>> converter =
+        Converters.fromEnumerable(rel, type);
+    return new CalciteCode(dataContext, rel2, env, converter);
+  }
+
+  /**
+   * Transforms a relational expression, converting sub-queries (for example,
+   * {@code RexSubQuery.IN} becomes a {@code Join}) and decorrelating.
+   */
+  private static RelNode transform(RelNode rel) {
     final Program program =
         Programs.sequence(
             Programs.subQuery(DefaultRelMetadataProvider.INSTANCE),
             new DecorrelateProgram());
     final RelOptPlanner planner = rel.getCluster().getPlanner();
     final RelTraitSet traitSet = rel.getCluster().traitSet();
-    final RelNode rel2 =
-        program.run(
-            planner, rel, traitSet, ImmutableList.of(), ImmutableList.of());
-
-    final Function<Enumerable<Object[]>, List<Object>> converter =
-        Converters.fromEnumerable(rel, type);
-    return new CalciteCode(dataContext, rel2, env, converter);
+    return program.run(
+        planner, rel, traitSet, ImmutableList.of(), ImmutableList.of());
   }
 
   /**
@@ -155,15 +160,7 @@ public class Calcite {
    * dialect.
    */
   public String toSql(RelNode rel, SqlDialect dialect) {
-    final Program program =
-        Programs.sequence(
-            Programs.subQuery(DefaultRelMetadataProvider.INSTANCE),
-            new DecorrelateProgram());
-    final RelOptPlanner planner = rel.getCluster().getPlanner();
-    final RelTraitSet traitSet = rel.getCluster().traitSet();
-    final RelNode rel2 =
-        program.run(
-            planner, rel, traitSet, ImmutableList.of(), ImmutableList.of());
+    final RelNode rel2 = transform(rel);
     final RelToSqlConverter converter = new RelToSqlConverter(dialect);
     String sql =
         converter
@@ -189,83 +186,58 @@ public class Calcite {
   public List<String> toIncrementalDdl(
       RelNode rel, SqlDialect dialect, String targetName) {
     final String selectSql = toSql(rel, dialect);
-    final boolean hasAggregate =
-        selectSql.contains("ARG_MAX(")
-            || selectSql.contains("ARG_MIN(")
-            || selectSql.contains("SUM(")
-            || selectSql.contains("COUNT(")
-            || selectSql.contains("MAX(")
-            || selectSql.contains("MIN(")
-            || selectSql.contains("AVG(");
-    if (hasAggregate) {
-      return aggregateIncrementalDdl(selectSql, targetName);
+    final Aggregate aggregate = findAggregate(transform(rel));
+    if (aggregate != null) {
+      return aggregateIncrementalDdl(selectSql, aggregate, targetName);
     } else {
       return filterProjectIncrementalDdl(selectSql, targetName);
     }
   }
 
+  /** Returns the outermost {@link Aggregate} of a plan, or null. */
+  private static @Nullable Aggregate findAggregate(RelNode rel) {
+    if (rel instanceof Aggregate) {
+      return (Aggregate) rel;
+    }
+    for (RelNode input : rel.getInputs()) {
+      final Aggregate aggregate = findAggregate(input);
+      if (aggregate != null) {
+        return aggregate;
+      }
+    }
+    return null;
+  }
+
   /**
    * Generates incremental DDL for an aggregate query using AggregatingMergeTree
-   * and -State/-Merge combinators.
+   * and -State combinators.
    */
   private static List<String> aggregateIncrementalDdl(
-      String selectSql, String targetName) {
-    // Replace aggregate functions with -State variants
+      String selectSql, Aggregate aggregate, String targetName) {
+    // Replace aggregate functions with -State variants. (ClickHouse output
+    // has argMax/argMin already lowercased by toSql.)
     final String stateSql =
         selectSql
-            .replace("ARG_MAX(", "argMaxState(")
-            .replace("ARG_MIN(", "argMinState(")
+            .replace("argMax(", "argMaxState(")
+            .replace("argMin(", "argMinState(")
             .replace("SUM(", "sumState(")
             .replace("COUNT(", "countState(")
             .replace("MAX(", "maxState(")
             .replace("MIN(", "minState(")
             .replace("AVG(", "avgState(");
 
-    // Extract GROUP BY columns for ORDER BY
-    final String orderBy;
-    final int groupByIdx = stateSql.toUpperCase().lastIndexOf("GROUP BY");
-    if (groupByIdx >= 0) {
-      orderBy = stateSql.substring(groupByIdx + 9).trim();
-    } else {
-      orderBy = "tuple()";
+    // The group keys are the first fields of the aggregate's output row.
+    final List<String> groupKeys = new ArrayList<>();
+    final List<String> fieldNames = aggregate.getRowType().getFieldNames();
+    for (int i = 0; i < aggregate.getGroupCount(); i++) {
+      groupKeys.add("`" + fieldNames.get(i) + "`");
     }
-
-    final List<String> ddl = new ArrayList<>();
-
-    // 1. Create target table with AggregatingMergeTree
-    //    Use LIMIT 0 to get schema without data
-    ddl.add(
-        "CREATE TABLE IF NOT EXISTS "
-            + targetName
-            + "\n" //
-            + "ENGINE = AggregatingMergeTree()\n"
-            + "ORDER BY ("
-            + orderBy
-            + ")\n"
-            + "AS "
-            + stateSql
-            + "\n"
-            + "LIMIT 0");
-
-    // 2. Create MV for incremental processing
-    ddl.add(
-        "CREATE MATERIALIZED VIEW IF NOT EXISTS\n" //
-            + targetName
-            + "_mv\n"
-            + "TO "
-            + targetName
-            + "\n"
-            + "AS "
-            + stateSql);
-
-    // 3. Initial backfill
-    ddl.add(
-        "INSERT INTO "
-            + targetName
-            + "\n" //
-            + stateSql);
-
-    return ddl;
+    final String orderBy =
+        groupKeys.isEmpty()
+            ? "tuple()"
+            : "(" + String.join(", ", groupKeys) + ")";
+    return incrementalDdl(
+        stateSql, targetName, "AggregatingMergeTree()", orderBy);
   }
 
   /**
@@ -274,21 +246,30 @@ public class Calcite {
    */
   private static List<String> filterProjectIncrementalDdl(
       String selectSql, String targetName) {
-    final List<String> ddl = new ArrayList<>();
+    return incrementalDdl(selectSql, targetName, "MergeTree()", "tuple()");
+  }
 
-    // 1. Create target table
+  /**
+   * Generates the three-statement incremental template: target table (LIMIT 0
+   * gives the schema without data), materialized view, initial backfill.
+   */
+  private static List<String> incrementalDdl(
+      String sql, String targetName, String engine, String orderBy) {
+    final List<String> ddl = new ArrayList<>();
     ddl.add(
         "CREATE TABLE IF NOT EXISTS "
             + targetName
             + "\n" //
-            + "ENGINE = MergeTree()\n"
-            + "ORDER BY tuple()\n"
+            + "ENGINE = "
+            + engine
+            + "\n"
+            + "ORDER BY "
+            + orderBy
+            + "\n"
             + "AS "
-            + selectSql
+            + sql
             + "\n"
             + "LIMIT 0");
-
-    // 2. Create MV
     ddl.add(
         "CREATE MATERIALIZED VIEW IF NOT EXISTS\n" //
             + targetName
@@ -297,15 +278,12 @@ public class Calcite {
             + targetName
             + "\n"
             + "AS "
-            + selectSql);
-
-    // 3. Initial backfill
+            + sql);
     ddl.add(
         "INSERT INTO "
             + targetName
             + "\n" //
-            + selectSql);
-
+            + sql);
     return ddl;
   }
 

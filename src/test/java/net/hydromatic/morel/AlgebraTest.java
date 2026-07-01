@@ -24,12 +24,19 @@ import static net.hydromatic.morel.Matchers.isCode;
 import static net.hydromatic.morel.Matchers.isFullyCalcite;
 import static net.hydromatic.morel.Matchers.list;
 import static net.hydromatic.morel.Ml.ml;
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 
+import com.google.common.collect.ImmutableMap;
+import java.util.List;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import net.hydromatic.morel.eval.Prop;
+import net.hydromatic.morel.foreign.Calcite;
+import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.sql.dialect.ClickHouseSqlDialect;
+import org.apache.calcite.tools.RelBuilder;
 import org.junit.jupiter.api.Test;
 
 /** Tests translation of Morel programs to Apache Calcite relational algebra. */
@@ -944,6 +951,53 @@ public class AlgebraTest {
                 list(7876, "ADAMS", 3, 7788),
                 list(7369, "SMITH", 3, 7902)));
   }
+  /**
+   * Tests incremental DDL for an aggregate query: AggregatingMergeTree keyed by
+   * the group columns, -State aggregate functions, MV, and backfill.
+   */
+  @Test
+  void testToIncrementalDdlAggregate() {
+    final Calcite calcite = Calcite.withDataSets(ImmutableMap.of());
+    final RelBuilder b = calcite.relBuilder();
+    final RelNode rel =
+        b.values(new String[] {"deptno", "sal"}, 10, 100, 10, 200, 20, 300)
+            .aggregate(b.groupKey("deptno"), b.sum(false, "s", b.field("sal")))
+            .build();
+    final List<String> ddls =
+        calcite.toIncrementalDdl(rel, ClickHouseSqlDialect.DEFAULT, "t");
+    assertThat(ddls.size(), is(3));
+    assertThat(ddls.get(0), containsString("CREATE TABLE IF NOT EXISTS t"));
+    assertThat(ddls.get(0), containsString("ENGINE = AggregatingMergeTree()"));
+    assertThat(ddls.get(0), containsString("ORDER BY (`deptno`)"));
+    assertThat(ddls.get(0), containsString("sumState("));
+    assertThat(
+        ddls.get(1), containsString("CREATE MATERIALIZED VIEW IF NOT EXISTS"));
+    assertThat(ddls.get(1), containsString("TO t"));
+    assertThat(ddls.get(2), containsString("INSERT INTO t"));
+  }
+
+  /**
+   * Tests incremental DDL for a filter/project query: plain MergeTree, the SQL
+   * unchanged.
+   */
+  @Test
+  void testToIncrementalDdlFilterProject() {
+    final Calcite calcite = Calcite.withDataSets(ImmutableMap.of());
+    final RelBuilder b = calcite.relBuilder();
+    final RelNode rel =
+        b.values(new String[] {"deptno", "sal"}, 10, 100, 20, 300)
+            .filter(b.greaterThan(b.field("sal"), b.literal(150)))
+            .project(b.field("deptno"))
+            .build();
+    final List<String> ddls =
+        calcite.toIncrementalDdl(rel, ClickHouseSqlDialect.DEFAULT, "t");
+    assertThat(ddls.size(), is(3));
+    assertThat(ddls.get(0), containsString("ENGINE = MergeTree()"));
+    assertThat(ddls.get(0), containsString("ORDER BY tuple()"));
+    assertThat(ddls.get(0), containsString("LIMIT 0"));
+    assertThat(ddls.get(2), containsString("INSERT INTO t"));
+  }
+
   /** Tests generating ClickHouse SQL from a projection. */
   @Test
   void testToSqlProject() {
