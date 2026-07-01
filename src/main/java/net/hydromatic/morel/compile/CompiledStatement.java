@@ -62,8 +62,12 @@ public interface CompiledStatement {
   void getBindings(Consumer<Binding> outBindings);
 
   /**
-   * Returns the compiled {@link Code} for this statement, or null if not
-   * available. The code can be inspected without evaluating it.
+   * Returns the compiled {@link Code} of this statement's first value binding,
+   * or null if not available. The code can be inspected without evaluating it.
+   *
+   * <p>A declaration with several bindings compiles to several actions; callers
+   * (the SQL-generation modes) pass a single expression, for which the first
+   * action's code is the whole statement.
    */
   default @Nullable Code getCode() {
     return null;
