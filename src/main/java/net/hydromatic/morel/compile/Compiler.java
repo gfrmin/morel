@@ -767,6 +767,27 @@ public class Compiler {
     return Codes.apply2(applicable2, argCodes.left(0), argCodes.left(1));
   }
 
+  /**
+   * Returns whether a yielded record's field names exactly match the step's
+   * binding names. True for an ordinary record yield (fields scattered into
+   * like-named bindings) and for the from-flattening rename {@code {e2 = ...}};
+   * false for a row binder {@code yield r = {c = ...}}, whose whole record is
+   * bound to the single name {@code r}.
+   */
+  private static boolean fieldsMatchBindings(
+      Core.Tuple tuple, List<Binding> bindings) {
+    final List<String> fieldNames = tuple.type().argNames();
+    if (fieldNames.size() != bindings.size()) {
+      return false;
+    }
+    for (Binding binding : bindings) {
+      if (!fieldNames.contains(binding.id.name)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   protected Code compileFrom(Context cx, Core.From from) {
     Supplier<RowSink> rowSinkFactory =
         createRowSinkFactory(
@@ -897,7 +918,6 @@ public class Compiler {
       return () -> RowSinks.collect(code);
     }
     final Core.FromStep firstStep = steps.get(0);
-    final Code code;
     switch (firstStep.op) {
       case SCAN:
       case LEFT_JOIN:
@@ -978,7 +998,9 @@ public class Compiler {
           // Note that we don't use nextFactory.
           final Code yieldCode = compileRow(cx, yield.exp);
           return () -> RowSinks.collect(yieldCode);
-        } else if (yield.exp instanceof Core.Tuple) {
+        } else if (yield.exp instanceof Core.Tuple
+            && fieldsMatchBindings(
+                (Core.Tuple) yield.exp, yield.env.bindings)) {
           final Core.Tuple tuple = (Core.Tuple) yield.exp;
           final RecordLikeType recordType = tuple.type();
           final Map<String, Code> codeMap =
@@ -1373,11 +1395,6 @@ public class Compiler {
         }
 
         @Override
-        public Object apply(EvalEnv evalEnv, Object arg) {
-          throw new UnsupportedOperationException("use apply(Stack, Object)");
-        }
-
-        @Override
         public Object apply(Stack stack, Object arg) {
           return code.eval(stack);
         }
@@ -1434,7 +1451,7 @@ public class Compiler {
     if (valDecl.pat.op != Op.ID_PAT) {
       return null;
     }
-    final Core.NamedPat xPat = (Core.NamedPat) valDecl.pat;
+    final Core.NamedPat xPat = valDecl.pat;
     // Detect the form "let val $tmp = expr in case $tmp of pat => body end",
     // which is how the Resolver desugars "let val (x, y) = expr in body end".
     // Compile directly as a multi-variable stack push, avoiding an intermediate
@@ -1476,7 +1493,7 @@ public class Compiler {
     if (valDecl.pat.op != Op.ID_PAT) {
       return null;
     }
-    final Core.NamedPat xPat = (Core.NamedPat) valDecl.pat;
+    final Core.NamedPat xPat = valDecl.pat;
     // Detect the desugared form (tail position); see tryCompileLetStack.
     if (bodyExp.op == Op.CASE) {
       final Core.Case case_ = (Core.Case) bodyExp;
@@ -1550,10 +1567,8 @@ public class Compiler {
     StackLayout newLayout = cx.layout;
     int depth = cx.localDepth;
     for (Code mc : matchCodes) {
-      for (Core.Pat pat : ((MatchCode) mc).patCodes.leftList()) {
-        for (Core.NamedPat namedPat : pat.expand()) {
-          newLayout = newLayout.with(namedPat, depth++);
-        }
+      for (Core.NamedPat namedPat : ((MatchCode) mc).pat.expand()) {
+        newLayout = newLayout.with(namedPat, depth++);
       }
     }
     return new Context(
@@ -1564,11 +1579,13 @@ public class Compiler {
       Context cx, List<Code> matchCodes, Code resultCode, Type resultType) {
     // Extract (pat, expCode) pairs from the MatchCode wrappers and emit a
     // stack-based multi-let.
-    final PairList<Core.Pat, Code> pairs = PairList.of();
-    for (Code mc : matchCodes) {
-      pairs.addAll(((MatchCode) mc).patCodes);
-    }
-    return Codes.stackMultiLet(pairs.immutable(), resultCode);
+    return Codes.stackMultiLet(
+        ImmutablePairList.fromTransformed(
+            matchCodes,
+            (code, consumer) ->
+                consumer.accept(
+                    ((MatchCode) code).pat, ((MatchCode) code).code)),
+        resultCode);
   }
 
   private Code compileLocal(Context cx, Core.Local local) {
@@ -2003,7 +2020,7 @@ public class Compiler {
           if (!linkCodes.isEmpty()) {
             link(linkCodes, pat, code);
           }
-          matchCodes.add(new MatchCode(ImmutablePairList.of(pat, code), pos));
+          matchCodes.add(new MatchCode(pat, code));
 
           if (actions != null) {
             actions.add(
@@ -2094,22 +2111,18 @@ public class Compiler {
 
   /** Code that creates a {@link Closure} for a match expression. */
   private static class MatchCode implements Code {
-    private final ImmutablePairList<Core.Pat, Code> patCodes;
-    private final Pos pos;
+    private final Core.Pat pat;
+    private final Code code;
 
-    MatchCode(ImmutablePairList<Core.Pat, Code> patCodes, Pos pos) {
-      this.patCodes = patCodes;
-      this.pos = pos;
+    MatchCode(Core.Pat pat, Code code) {
+      this.pat = pat;
+      this.code = code;
     }
 
     @Override
     public Describer describe(Describer describer) {
       return describer.start(
-          "match",
-          d ->
-              patCodes.forEach(
-                  (pat, code) ->
-                      d.arg("", pat.describe(describer)).arg("", code)));
+          "match", d -> d.arg("", pat.describe(describer)).arg("", code));
     }
   }
 

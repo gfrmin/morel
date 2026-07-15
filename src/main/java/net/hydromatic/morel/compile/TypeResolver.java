@@ -986,24 +986,15 @@ public class TypeResolver {
         return reg(opSection, v, opTerm);
 
       case ORDINAL:
-        final Ast.Ordinal ordinal = (Ast.Ordinal) node;
-        checkInQuery(env, ordinal);
-        final Triple step = last(stepStack.rightList());
-        validations.add(
-            resolved -> {
-              requireNonNull(step.c);
-              Type stepType = resolved.typeMap.termToType(step.c);
-              if (stepType.op() != Op.LIST) {
-                throw new TypeException(
-                    "cannot use 'ordinal' in unordered query", ordinal.pos);
-              }
-            });
-        return reg(ordinal, v, toTerm(PrimitiveType.INT));
+        return deduceOrdinalType(env, (Ast.Ordinal) node, v);
 
       case CURRENT:
         final Ast.Current current = (Ast.Current) node;
         final Term term2 = checkInQuery(env, current);
         return reg(current, v, term2);
+
+      case TYPE_STRING:
+        return deduceTypeStringType(env, (Ast.TypeString) node, v);
 
       case ELEMENTS:
         final Ast.Elements elements = (Ast.Elements) node;
@@ -1103,6 +1094,35 @@ public class TypeResolver {
   private Term checkInQuery(TypeEnv env, Ast.Exp node) {
     return env.get(
         typeSystem, BuiltIn.Z_CURRENT.mlName, TypeEnv.onlyValidInQuery(node));
+  }
+
+  /** Deduces the type of an {@code ordinal} keyword: {@code int}. */
+  private Ast.Exp deduceOrdinalType(
+      TypeEnv env, Ast.Ordinal ordinal, Variable v) {
+    checkInQuery(env, ordinal);
+    final Triple step = last(stepStack.rightList());
+    validations.add(
+        resolved -> {
+          requireNonNull(step.c);
+          Type stepType = resolved.typeMap.termToType(step.c);
+          if (stepType.op() != Op.LIST) {
+            throw new TypeException(
+                "cannot use 'ordinal' in unordered query", ordinal.pos);
+          }
+        });
+    return reg(ordinal, v, toTerm(PrimitiveType.INT));
+  }
+
+  /**
+   * Deduces the type of a {@code type_string} expression: {@code string}. The
+   * operand is type-checked (so its type appears in the type map for the
+   * resolver to render) but never evaluated.
+   */
+  private Ast.Exp deduceTypeStringType(
+      TypeEnv env, Ast.TypeString typeString, Variable v) {
+    final Variable vOperand = unifier.variable();
+    final Ast.Exp operand = deduceExpType(env, typeString.exp, vOperand);
+    return reg(typeString.copy(operand), v, toTerm(PrimitiveType.STRING));
   }
 
   /**
@@ -1690,7 +1710,7 @@ public class TypeResolver {
     final Variable c6 = unifier.variable();
     isListOrBagMatchingInput(c6, v6, requireNonNull(p.c), p.v);
 
-    if (yieldExp2.op == Op.RECORD) {
+    if (yield.binder == null && yieldExp2.op == Op.RECORD) {
       final Ast.Record record2 = (Ast.Record) yieldExp2;
       Term term = map.get(yieldExp2);
       if (record2.with != null) {
@@ -1708,14 +1728,30 @@ public class TypeResolver {
             });
       }
     } else {
-      String label =
-          requireNonNull(
-              first(ast.implicitLabelOpt(yield.exp), Op.CURRENT.opName));
-      envs.bind(label, v6);
+      final Ast.Id label = getLabel(yield.binder, yield.exp);
+      envs.bind(label.name, v6);
       fieldVars.clear();
-      fieldVars.add(ast.id(Pos.ZERO, label), v6);
+      fieldVars.add(label, v6);
     }
     return Triple.of(p.rootEnv, envs.typeEnv, v6, c6);
+  }
+
+  /** Derives the row label. */
+  private static Ast.Id getLabel(
+      Ast.@Nullable Id binder, Ast.@Nullable Exp exp) {
+    if (binder != null) {
+      // A binder ("yield r = e" or "yieldAll r in e") names the whole row 'r'.
+      return binder;
+    }
+    if (exp != null) {
+      final String implicitLabelOpt = ast.implicitLabelOpt(exp);
+      if (implicitLabelOpt != null) {
+        // In "yield a.b" the row is implicitly named "b".
+        return ast.id(Pos.ZERO, implicitLabelOpt);
+      }
+    }
+    // Otherwise the label is "current".
+    return ast.id(Pos.ZERO, requireNonNull(Op.CURRENT.opName));
   }
 
   /**
@@ -1753,9 +1789,10 @@ public class TypeResolver {
         elem);
     steps.add(yieldAll.copy(exp));
     final TypeEnvHolder envs = new TypeEnvHolder(p.rootEnv);
-    envs.bind(Op.CURRENT.opName, elem);
+    final Ast.Id label = getLabel(yieldAll.binder, null);
+    envs.bind(label.name, elem);
     fieldVars.clear();
-    fieldVars.add(ast.id(Pos.ZERO, Op.CURRENT.opName), elem);
+    fieldVars.add(label, elem);
     return Triple.of(p.rootEnv, envs.typeEnv, elem, c);
   }
 
@@ -1801,6 +1838,14 @@ public class TypeResolver {
             : compute.copy(compute.with, args2.immutable());
 
     final Variable v2 = fieldVar(fieldVars, group.isAtom());
+    if (group.binder != null) {
+      // A binder ("group g = {..} compute {..}") names the whole group row
+      // (keys and computed fields) 'g', an atom; expose only 'g' downstream.
+      bindings.clear();
+      bindings.add(group.binder.name, v2);
+      fieldVars.clear();
+      fieldVars.add(group.binder, v2);
+    }
     if (group.op == Op.GROUP) {
       steps.add(group.copy(group2, compute2));
 

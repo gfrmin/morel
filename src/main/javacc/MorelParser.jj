@@ -368,6 +368,24 @@ Current current() : {}
   }
 }
 
+/** Parses a {@code type_string} expression, e.g.
+ * "{@code type_string (1 + 2)}" evaluates to the string "{@code int}".
+ *
+ * <p>Like {@code typeof}, the operand is parsed at expression precedence 9,
+ * so "{@code type_string x . y}" does not require parentheses but
+ * "{@code type_string (x + y)}" does. */
+Exp typeString() :
+{
+  final Span span;
+  final Exp exp;
+}
+{
+  <TYPE_STRING> { span = Span.of(pos()); }
+  exp = expression9() {
+    return ast.typeString(span.end(this), exp);
+  }
+}
+
 /** Parses the {@code elements} keyword. */
 Elements elements() : {}
 {
@@ -672,6 +690,7 @@ void fromStep(List<FromStep> steps) :
   final Exp takeExp;
   final Exp requireExp;
   final Exp yieldExp;
+  final Id binder;
   final Exp groupExp;
   final Pat pat;
   final Exp aggregate;
@@ -700,6 +719,12 @@ void fromStep(List<FromStep> steps) :
   }
 |
   <GROUP> { span = Span.of(pos()); }
+  (
+    LOOKAHEAD(( <IDENTIFIER> | <QUOTED_IDENTIFIER> ) <EQ>)
+    binder = identifier() <EQ>
+  |
+    { binder = null; }
+  )
   groupExp = expression()
   (
     <COMPUTE> aggregate = expression()
@@ -707,7 +732,7 @@ void fromStep(List<FromStep> steps) :
     { aggregate = null; }
   )
   {
-    steps.add(ast.group(span.end(this), groupExp, aggregate));
+    steps.add(ast.group(span.end(this), binder, groupExp, aggregate));
   }
 |
   <COMPUTE> { span = Span.of(pos()); } aggregate = expression() {
@@ -759,12 +784,26 @@ void fromStep(List<FromStep> steps) :
     steps.add(ast.where(span.end(this), filterExp));
   }
 |
-  <YIELD> { span = Span.of(pos()); } yieldExp = expression() {
-    steps.add(ast.yield(span.end(this), yieldExp));
+  <YIELD> { span = Span.of(pos()); }
+  (
+    LOOKAHEAD(( <IDENTIFIER> | <QUOTED_IDENTIFIER> ) <EQ>)
+    binder = identifier() <EQ>
+  |
+    { binder = null; }
+  )
+  yieldExp = expression() {
+    steps.add(ast.yield(span.end(this), binder, yieldExp));
   }
 |
-  <YIELDALL> { span = Span.of(pos()); } yieldExp = expression() {
-    steps.add(ast.yieldAll(span.end(this), yieldExp));
+  <YIELDALL> { span = Span.of(pos()); }
+  (
+    LOOKAHEAD(( <IDENTIFIER> | <QUOTED_IDENTIFIER> ) <IN>)
+    binder = identifier() <IN>
+  |
+    { binder = null; }
+  )
+  yieldExp = expression() {
+    steps.add(ast.yieldAll(span.end(this), binder, yieldExp));
   }
 }
 
@@ -1316,6 +1355,8 @@ Exp atom() :
   e = opSection() { return e; }
 |
   e = current() { return e; }
+|
+  e = typeString() { return e; }
 |
   e = elements() { return e; }
 |
@@ -2425,6 +2466,7 @@ AstNode statementEof() :
 | < TAKE: "take" >
 | < THROUGH: "through" >
 | < TYPEOF: "typeof" >
+| < TYPE_STRING: "type_string" >
 | < UNION: "union" >
 | < UNORDER: "unorder" >
 | < WHERE: "where" >

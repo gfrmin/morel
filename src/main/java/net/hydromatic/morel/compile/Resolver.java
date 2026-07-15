@@ -520,6 +520,8 @@ public class Resolver {
         return toCore((Ast.OpSection) exp);
       case CURRENT:
         return toCore((Ast.Current) exp);
+      case TYPE_STRING:
+        return toCore((Ast.TypeString) exp);
       case ELEMENTS:
         return toCore((Ast.Elements) exp);
       case ORDINAL:
@@ -582,6 +584,13 @@ public class Resolver {
 
   private Core.Exp toCore(Ast.Current ignoredCurrent) {
     return requireNonNull(this.current);
+  }
+
+  private Core.Exp toCore(Ast.TypeString typeString) {
+    // Render the operand's inferred type to a string. The operand is not
+    // converted to Core, so it is never evaluated.
+    final Type type = typeMap.getType(typeString.exp);
+    return core.stringLiteral(type.moniker());
   }
 
   private Core.Exp toCore(Ast.Ordinal ordinal) {
@@ -1532,8 +1541,9 @@ public class Resolver {
     @Override
     protected void visit(Ast.Yield yield) {
       final Resolver r = withStepEnv(fromBuilder.stepEnv());
-      Core.Exp exp = r.toCore(yield.exp);
-      fromBuilder.yield_(exp);
+      final Core.Exp exp = r.toCore(yield.exp);
+      final String binder = yield.binder == null ? null : yield.binder.name;
+      fromBuilder.yield_(binder, exp);
     }
 
     @Override
@@ -1574,8 +1584,16 @@ public class Resolver {
       final Resolver r = withStepEnv(fromBuilder.stepEnv());
       final Core.Exp coreExp = r.toCore(yieldAll.exp);
       final Type elementType = coreExp.type.elementType();
-      final Core.IdPat pat =
-          core.idPat(elementType, typeMap.typeSystem.nameGenerator::get);
+      final Core.IdPat pat;
+      if (yieldAll.binder == null) {
+        pat = core.idPat(elementType, typeMap.typeSystem.nameGenerator::get);
+      } else {
+        pat =
+            core.idPat(
+                elementType,
+                yieldAll.binder.name,
+                typeMap.typeSystem.nameGenerator::inc);
+      }
       fromBuilder.scan(pat, coreExp);
       fromBuilder.yield_(core.id(pat));
     }
@@ -1661,7 +1679,8 @@ public class Resolver {
       } else {
         yieldExp = core.record(typeMap.typeSystem, postExps);
       }
-      fromBuilder.yield_(yieldExp);
+      final String binder = group.binder == null ? null : group.binder.name;
+      fromBuilder.yield_(binder, yieldExp);
     }
 
     @Override
